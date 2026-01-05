@@ -1,43 +1,15 @@
-// GLOBAL ALERT MODAL (must be at top of file)
-window.showAlertModal = function (message, type = "success") {
-    let modal = document.getElementById("alert-modal");
-  
-    if (!modal) {
-      modal = document.createElement("div");
-      modal.id = "alert-modal";
-      modal.style.position = "fixed";
-      modal.style.top = "20px";
-      modal.style.left = "50%";
-      modal.style.transform = "translateX(-50%)";
-      modal.style.padding = "14px 20px";
-      modal.style.borderRadius = "8px";
-      modal.style.fontSize = "14px";
-      modal.style.fontWeight = "500";
-      modal.style.color = "#fff";
-      modal.style.zIndex = "99999";
-      modal.style.boxShadow = "0 10px 30px rgba(0,0,0,0.2)";
-      modal.style.display = "none";
-      document.body.appendChild(modal);
-    }
-  
-    modal.textContent = message;
-    modal.style.background =
-      type === "error" ? "#e53935" : "#2e7d32";
-  
-    modal.style.display = "block";
-  
-    setTimeout(() => {
-      modal.style.display = "none";
-    }, 2500);
-  };
-  
-
 // Data Storage Key (single key for all data)
 const VAULT_DATA_KEY = 'measurement_vault_data';
 
 // Legacy Keys (for migration)
 const LEGACY_CLIENTS_KEY = 'measurement_vault_clients';
 const LEGACY_MEASUREMENTS_KEY = 'measurement_vault_measurements';
+
+// Logout state key
+const LOGOUT_STATE_KEY = 'measurement_vault_logged_out';
+
+// Current business session ID key
+const CURRENT_BUSINESS_ID_KEY = 'measurement_vault_current_business_id';
 
 // Garment Types by Sex (including Custom option)
 const GARMENT_TYPES = {
@@ -121,6 +93,32 @@ async function getBusiness() {
     const supabase = getSupabase();
     if (!supabase) return null;
     
+    // First, check if we have a stored business ID in session
+    const storedBusinessId = localStorage.getItem(CURRENT_BUSINESS_ID_KEY);
+    
+    if (storedBusinessId) {
+        // Fetch the specific business by ID
+        const { data, error } = await supabase
+            .from('businesses')
+            .select('*')
+            .eq('id', storedBusinessId)
+            .single();
+        
+        if (!error && data) {
+            // Convert to match old format
+            return {
+                id: data.id,
+                name: data.name,
+                email: data.email,
+                phone: data.phone,
+                createdAt: data.created_at
+            };
+        }
+        // If stored ID is invalid, clear it and fall through to default behavior
+        localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
+    }
+    
+    // Fallback: get first business (for backward compatibility)
     const { data, error } = await supabase
         .from('businesses')
         .select('*')
@@ -128,6 +126,9 @@ async function getBusiness() {
         .single();
     
     if (error || !data) return null;
+    
+    // Store the ID for future use
+    localStorage.setItem(CURRENT_BUSINESS_ID_KEY, data.id);
     
     // Convert to match old format
     return {
@@ -137,6 +138,20 @@ async function getBusiness() {
         phone: data.phone,
         createdAt: data.created_at
     };
+}
+
+// Generate a UUID v4
+function generateUUID() {
+    // Use browser's native crypto.randomUUID() if available (more reliable)
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        return crypto.randomUUID();
+    }
+    // Fallback to manual generation
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
 }
 
 // Create business and initialize data structure
@@ -165,6 +180,9 @@ async function createBusiness(name, email, phone) {
             console.error('No data returned from insert');
             return null;
         }
+        
+        // Store the business ID in localStorage for session tracking
+        localStorage.setItem(CURRENT_BUSINESS_ID_KEY, data.id);
         
         // Convert to match old format
         return {
@@ -227,70 +245,112 @@ async function matchBusiness(name, email, phone) {
     );
 }
 
-// Session persistence keys
-const BUSINESS_SESSION_KEY = 'measurement_vault_business_session';
+// Find business by credentials (for login)
+async function findBusinessByCredentials(name, email, phone) {
+    const supabase = getSupabase();
+    if (!supabase) return null;
+    
+    try {
+        // Search for business matching all three credentials
+        const { data, error } = await supabase
+            .from('businesses')
+            .select('*')
+            .eq('name', name.trim())
+            .eq('email', email.trim().toLowerCase())
+            .eq('phone', phone.trim())
+            .limit(1);
+        
+        // Check if we got results and no error
+        if (error || !data || data.length === 0) {
+            return null;
+        }
+        
+        const business = data[0];
+        
+        // Store the business ID for session tracking
+        localStorage.setItem(CURRENT_BUSINESS_ID_KEY, business.id);
+        
+        // Convert to match old format
+        return {
+            id: business.id,
+            name: business.name,
+            email: business.email,
+            phone: business.phone,
+            createdAt: business.created_at
+        };
+    } catch (err) {
+        console.error('Exception in findBusinessByCredentials:', err);
+        return null;
+    }
+}
 
 // Logout - Set logged out state without deleting data
-let isLoggedOut = false;
-
 function logoutBusiness() {
-    isLoggedOut = true;
-    // Clear session from localStorage
-    localStorage.removeItem(BUSINESS_SESSION_KEY);
+    // Clear all localStorage items related to business data
+    localStorage.removeItem(VAULT_DATA_KEY);
+    localStorage.removeItem(LEGACY_CLIENTS_KEY);
+    localStorage.removeItem(LEGACY_MEASUREMENTS_KEY);
+    
+    // Clear current business session ID
+    localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
+    
+    // Set logged out state in localStorage (persists across refreshes)
+    // This ensures that after logout, refreshing or reopening the app always shows Business Registration
+    localStorage.setItem(LOGOUT_STATE_KEY, 'true');
+    
+    // Clear all sessionStorage items (clients, measurements, etc.)
+    try {
+        sessionStorage.clear();
+    } catch (e) {
+        console.warn('Error clearing sessionStorage:', e);
+    }
+    
+    // Reset all in-memory variables
+    currentClientId = null;
+    currentMeasurementId = null;
+    currentMeasurementDetailId = null;
+    previousScreen = 'home-screen';
+    recentMeasurementsOffset = 0;
+    recentMeasurementsExpanded = false;
+    
+    // Reset all forms
+    const businessLoginForm = document.getElementById('business-login-form');
+    if (businessLoginForm) {
+        businessLoginForm.reset();
+    }
+    
+    const businessSetupForm = document.getElementById('business-setup-form');
+    if (businessSetupForm) {
+        businessSetupForm.reset();
+    }
+    
+    const measurementForm = document.getElementById('measurement-form');
+    if (measurementForm) {
+        measurementForm.reset();
+        // Also reset the form state
+        resetMeasurementForm();
+    }
+    
+    const editBusinessForm = document.getElementById('edit-business-form');
+    if (editBusinessForm) {
+        editBusinessForm.reset();
+    }
+    
+    const editClientForm = document.getElementById('edit-client-form');
+    if (editClientForm) {
+        editClientForm.reset();
+    }
 }
 
 function loginBusiness() {
-    isLoggedOut = false;
-    // Save session to localStorage
-    saveBusinessSession();
+    // Clear logout state from localStorage
+    localStorage.removeItem(LOGOUT_STATE_KEY);
+    // Note: Business ID is already set when business is found/created
 }
 
 function isUserLoggedOut() {
-    return isLoggedOut;
-}
-
-// Save business session to localStorage
-async function saveBusinessSession() {
-    const business = await getBusiness();
-    if (business) {
-        localStorage.setItem(BUSINESS_SESSION_KEY, JSON.stringify({
-            businessId: business.id,
-            timestamp: Date.now()
-        }));
-    }
-}
-
-// Check if there's a saved business session
-async function hasSavedSession() {
-    const sessionData = localStorage.getItem(BUSINESS_SESSION_KEY);
-    if (!sessionData) return false;
-    
-    try {
-        const session = JSON.parse(sessionData);
-        // Verify the business still exists in Supabase
-        const business = await getBusiness();
-        if (business && business.id === session.businessId) {
-            return true;
-        } else {
-            // Business doesn't exist or ID doesn't match, clear invalid session
-            localStorage.removeItem(BUSINESS_SESSION_KEY);
-            return false;
-        }
-    } catch (e) {
-        // Invalid session data, clear it
-        localStorage.removeItem(BUSINESS_SESSION_KEY);
-        return false;
-    }
-}
-
-// Restore business session
-async function restoreBusinessSession() {
-    const hasSession = await hasSavedSession();
-    if (hasSession) {
-        isLoggedOut = false;
-        return true;
-    }
-    return false;
+    // Check localStorage for logout state (persists across refreshes)
+    return localStorage.getItem(LOGOUT_STATE_KEY) === 'true';
 }
 
 // Reset - Clear all data permanently
@@ -298,35 +358,39 @@ function resetBusiness() {
     localStorage.removeItem(VAULT_DATA_KEY);
     localStorage.removeItem(LEGACY_CLIENTS_KEY);
     localStorage.removeItem(LEGACY_MEASUREMENTS_KEY);
-    isLoggedOut = false;
+    // Clear current business session ID
+    localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
+    // Clear logout state as well (user will need to register again)
+    localStorage.removeItem(LOGOUT_STATE_KEY);
+    
+    // Clear sessionStorage
+    try {
+        sessionStorage.clear();
+    } catch (e) {
+        console.warn('Error clearing sessionStorage:', e);
+    }
 }
 
 // Initialize data structures if they don't exist
 async function initStorage() {
-    // Check if we need to show business setup
-    const hasBiz = await hasBusiness();
-    if (!hasBiz) {
+    // Step 1: Check if user is logged out (check localStorage for measurement_vault_logged_out)
+    // If logged out, always show Business Registration screen (regardless of existing business)
+    if (isUserLoggedOut()) {
         showScreen('business-setup-screen');
         return false;
     }
     
-    // Try to restore saved session first
-    const sessionRestored = await restoreBusinessSession();
-    if (sessionRestored) {
-        // Session restored successfully, user is logged in
-        return true;
-    }
-    
-    // No saved session, check if user is logged out
-    if (isUserLoggedOut()) {
-        showScreen('business-login-screen');
+    // Step 2: User is not logged out - check if business exists in Supabase
+    const hasBiz = await hasBusiness();
+    if (!hasBiz) {
+        // No business exists - show business registration screen
+        showScreen('business-setup-screen');
         return false;
     }
     
-    // No explicit logout state, but also no saved session
-    // This might be first time or session expired, show login screen
-    showScreen('business-login-screen');
-    return false;
+    // Step 3: Valid session exists - user is logged in and business exists
+    // Continue to dashboard (normal flow)
+    return true;
 }
 
 // Get all clients
@@ -942,6 +1006,21 @@ async function updateBusinessHeader() {
     }
 }
 
+// Update business name in all navbar instances
+async function updateNavbarBusinessName() {
+    const business = await getBusiness();
+    const businessName = (business && business.name && !isUserLoggedOut()) ? business.name : 'Measurement Vault';
+    
+    document.querySelectorAll('.navbar-business-name').forEach(element => {
+        element.textContent = businessName;
+        if (business && business.name) {
+            element.setAttribute('title', businessName);
+        } else {
+            element.removeAttribute('title');
+        }
+    });
+}
+
 // Screen Navigation
 function showScreen(screenId) {
     document.querySelectorAll('.screen').forEach(screen => {
@@ -953,6 +1032,9 @@ function showScreen(screenId) {
     if (screenId === 'home-screen') {
         updateBusinessHeader();
     }
+    
+    // Update business name in all navbar instances
+    updateNavbarBusinessName();
 }
 
 // Navigation Event Listeners
@@ -963,10 +1045,10 @@ document.getElementById('new-measurement-btn').addEventListener('click', () => {
     document.getElementById('client-name').focus();
 });
 
-document.getElementById('search-measurements-btn').addEventListener('click', async () => {
+document.getElementById('search-measurements-btn').addEventListener('click', () => {
     showScreen('search-screen');
     document.getElementById('search-input').focus();
-    await renderSearchResults('');
+    renderSearchResults('');
 });
 
 
@@ -1170,7 +1252,7 @@ document.getElementById('add-measurement-from-details-btn').addEventListener('cl
 });
 
 // Garment type change listener
-document.getElementById('garment-type').addEventListener('change', (e) => {
+document.getElementById('garment-type').addEventListener('change', async (e) => {
     const garmentType = e.target.value;
     updateMeasurementFields(garmentType);
     handleCustomGarmentVisibility(garmentType);
@@ -1188,7 +1270,7 @@ document.getElementById('back-from-new-btn').addEventListener('click', async () 
         // Normal flow - return to home
         resetMeasurementForm();
         showScreen('home-screen');
-        renderRecentMeasurements();
+        await renderRecentMeasurements();
     }
     // Reset form header
     document.querySelector('#new-measurement-screen h2').textContent = 'New Measurement';
@@ -1512,7 +1594,7 @@ async function getRecentMeasurements(limit = null, offset = 0) {
 
 // Render Recent Measurements on Home Screen with pagination
 let recentMeasurementsOffset = 0;
-let recentMeasurementsLimit = 2; // Initial limit
+let recentMeasurementsLimit = 4; // Initial limit
 let recentMeasurementsExpanded = false;
 
 async function renderRecentMeasurements(resetPagination = true) {
@@ -1531,41 +1613,48 @@ async function renderRecentMeasurements(resetPagination = true) {
     
     let html = result.measurements.map(item => `
         <div class="recent-item" data-measurement-id="${item.id}" data-client-id="${item.clientId}">
-            <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
-            <div class="recent-item-details">
-                <span class="recent-item-garment">${item.garment_type || 'No garment type'}</span>
+            <div class="recent-item-field">
+                <div class="recent-item-label">Name</div>
+                <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
+            </div>
+            <div class="recent-item-field">
+                <div class="recent-item-label">Garment</div>
+                <div class="recent-item-garment">${item.garment_type || 'No garment type'}</div>
+            </div>
+            <div class="recent-item-field">
+                <div class="recent-item-label">Date</div>
+                <div class="recent-item-date">${formatDateShort(item.date_created)}</div>
             </div>
         </div>
     `).join('');
     
-    // Add "See More" button if not expanded and there are more measurements
-    if (!recentMeasurementsExpanded && result.hasMore) {
-        html += `
-            <button id="see-more-measurements-btn" class="btn btn-secondary" style="margin-top: 16px;">
-                See More
-            </button>
-        `;
-    }
-    
-    // Add "Collapse" button if expanded
-    if (recentMeasurementsExpanded) {
-        html += `
-            <button id="collapse-measurements-btn" class="btn btn-secondary" style="margin-top: 16px;">
-                Collapse
-            </button>
-        `;
-    }
-    
-    // Add "Next" button if expanded and there are more measurements
-    if (recentMeasurementsExpanded && result.hasMore) {
-        html += `
-            <button id="next-measurements-btn" class="btn btn-secondary" style="margin-top: 16px;">
-                Next
-            </button>
-        `;
-    }
-    
     container.innerHTML = html;
+    
+    // Update header control (See More / Collapse button)
+    const controlContainer = document.getElementById('recent-measurements-control');
+    if (controlContainer) {
+        let controlHtml = '';
+        
+        // Add "See More" button if not expanded and there are more measurements
+        if (!recentMeasurementsExpanded && result.hasMore) {
+            controlHtml = `
+                <button id="see-more-measurements-btn" class="recent-control-btn">
+                    See more
+                </button>
+            `;
+        }
+        
+        // Add "Collapse" button if expanded
+        if (recentMeasurementsExpanded) {
+            controlHtml = `
+                <button id="collapse-measurements-btn" class="recent-control-btn">
+                    Collapse
+                </button>
+            `;
+        }
+        
+        controlContainer.innerHTML = controlHtml;
+    }
     
     // Add click listeners for measurement items - open Measurement Detail View
     container.querySelectorAll('.recent-item').forEach(item => {
@@ -1590,7 +1679,7 @@ async function renderRecentMeasurements(resetPagination = true) {
     if (collapseBtn) {
         collapseBtn.addEventListener('click', () => {
             recentMeasurementsExpanded = false;
-            recentMeasurementsLimit = 2;
+            recentMeasurementsLimit = 4;
             recentMeasurementsOffset = 0;
             renderRecentMeasurements(true);
         });
@@ -1606,9 +1695,17 @@ async function renderRecentMeasurements(resetPagination = true) {
                 const existingItems = container.querySelectorAll('.recent-item');
                 const nextItems = nextResult.measurements.map(item => `
                     <div class="recent-item" data-measurement-id="${item.id}" data-client-id="${item.clientId}">
-                        <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
-                        <div class="recent-item-details">
-                            <span class="recent-item-garment">${item.garment_type || 'No garment type'}</span>
+                        <div class="recent-item-field">
+                            <div class="recent-item-label">Name</div>
+                            <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
+                        </div>
+                        <div class="recent-item-field">
+                            <div class="recent-item-label">Garment</div>
+                            <div class="recent-item-garment">${item.garment_type || 'No garment type'}</div>
+                        </div>
+                        <div class="recent-item-field">
+                            <div class="recent-item-label">Date</div>
+                            <div class="recent-item-date">${formatDateShort(item.date_created)}</div>
                         </div>
                     </div>
                 `).join('');
@@ -1997,10 +2094,24 @@ function setTheme(theme) {
 
 // Update theme toggle button icon
 function updateThemeToggleIcon(theme) {
+    // Moon icon SVG (for dark mode - clicking switches to light)
+    const moonIcon = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>`;
+    
+    // Sun icon SVG (for light mode - clicking switches to dark)
+    const sunIcon = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>`;
+    
+    const icon = theme === 'dark' ? moonIcon : sunIcon;
+    
+    // Update button with ID
     const themeToggleBtn = document.getElementById('theme-toggle-btn');
     if (themeToggleBtn) {
-        themeToggleBtn.textContent = theme === 'dark' ? '☀️' : '🌙';
+        themeToggleBtn.innerHTML = icon;
     }
+    
+    // Update all navbar theme toggle buttons
+    document.querySelectorAll('.btn-theme-toggle').forEach(btn => {
+        btn.innerHTML = icon;
+    });
 }
 
 // Toggle theme
@@ -2016,10 +2127,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const savedTheme = localStorage.getItem(THEME_STORAGE_KEY) || 'dark';
     setTheme(savedTheme);
     
-    const themeToggleBtn = document.getElementById('theme-toggle-btn');
+    // Find theme toggle button in active screen or home screen
+    const activeScreen = document.querySelector('.screen.active') || document.getElementById('home-screen');
+    const themeToggleBtn = activeScreen ? activeScreen.querySelector('.btn-theme-toggle') || document.getElementById('theme-toggle-btn') : document.getElementById('theme-toggle-btn');
     if (themeToggleBtn) {
         themeToggleBtn.addEventListener('click', toggleTheme);
     }
+    
+    // Also add listeners to all theme toggle buttons for consistency
+    document.querySelectorAll('.btn-theme-toggle').forEach(btn => {
+        if (!btn.hasAttribute('data-listener-added')) {
+            btn.setAttribute('data-listener-added', 'true');
+            btn.addEventListener('click', toggleTheme);
+        }
+    });
 });
 
 // Edit Client functionality
@@ -2133,25 +2254,47 @@ document.getElementById('business-setup-form').addEventListener('submit', async 
         return;
     }
     
-    // Create business and initialize data
-    const business = await createBusiness(name, email, phone);
-    if (!business) {
-        alert('Error creating business. Please check the browser console (F12) for details.');
-        return;
+    // Clear any existing business session before starting registration
+    // This ensures old businesses don't override new registrations
+    localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
+    localStorage.removeItem(LOGOUT_STATE_KEY);
+    
+    // First, check if a business with these credentials already exists
+    const existingBusiness = await findBusinessByCredentials(name, email, phone);
+    
+    if (existingBusiness) {
+        // Business exists - ID is already stored in findBusinessByCredentials
+        // Log them in
+        loginBusiness();
+        
+        // Update header and show home screen
+        await updateBusinessHeader();
+        await updateNavbarBusinessName();
+        showScreen('home-screen');
+        await renderRecentMeasurements();
+    } else {
+        // Business doesn't exist - create new business
+        // Business ID will be stored in createBusiness function
+        const business = await createBusiness(name, email, phone);
+        if (!business) {
+            alert('Error creating business. Please check the browser console (F12) for details.');
+            return;
+        }
+        
+        // Log the user in after creating business (clears logout state)
+        loginBusiness();
+        
+        // Update header and show home screen
+        await updateBusinessHeader();
+        await updateNavbarBusinessName();
+        showScreen('home-screen');
+        await renderRecentMeasurements();
     }
-    
-    // Save session and login
-    await saveBusinessSession();
-    loginBusiness();
-    
-    // Update header and show home screen
-    await updateBusinessHeader();
-    showScreen('home-screen');
-    await renderRecentMeasurements();
 });
 
 // Settings button click
-document.getElementById('settings-btn').addEventListener('click', async () => {
+// Settings button handler - works with both ID and class
+async function handleSettingsClick() {
     // Display business info
     const business = await getBusiness();
     const infoContainer = document.getElementById('business-info-display');
@@ -2174,6 +2317,20 @@ document.getElementById('settings-btn').addEventListener('click', async () => {
     }
     
     showScreen('settings-screen');
+}
+
+// Add settings button listener to ID-based button
+const settingsBtn = document.getElementById('settings-btn');
+if (settingsBtn) {
+    settingsBtn.addEventListener('click', handleSettingsClick);
+}
+
+// Add settings button listeners to all navbar settings buttons
+document.querySelectorAll('.btn-settings').forEach(btn => {
+    if (!btn.hasAttribute('data-listener-added')) {
+        btn.setAttribute('data-listener-added', 'true');
+        btn.addEventListener('click', handleSettingsClick);
+    }
 });
 
 // Back from Settings
@@ -2252,13 +2409,11 @@ document.getElementById('logout-btn').addEventListener('click', () => {
         return;
     }
     
+    // Clear all business session data
     logoutBusiness();
     
-    // Clear the login form
-    document.getElementById('business-login-form').reset();
-    
-    // Show business login screen
-    showScreen('business-login-screen');
+    // Show business setup screen (registration screen) after logout
+    showScreen('business-setup-screen');
 });
 
 // Business Login Form Submission
@@ -2276,8 +2431,6 @@ document.getElementById('business-login-form').addEventListener('submit', async 
     
     // Check if credentials match
     if (await matchBusiness(name, email, phone)) {
-        // Save session and login
-        await saveBusinessSession();
         loginBusiness();
         await updateBusinessHeader();
         showScreen('home-screen');
@@ -2471,6 +2624,7 @@ function initializeApp() {
         const appInitialized = await initStorage();
         if (appInitialized) {
             await updateBusinessHeader();
+            await updateNavbarBusinessName();
             showScreen('home-screen');
             await renderRecentMeasurements();
             

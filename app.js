@@ -1,37 +1,3 @@
-// GLOBAL ALERT MODAL (must be at top of file)
-window.showAlertModal = function (message, type = "success") {
-    let modal = document.getElementById("alert-modal");
-  
-    if (!modal) {
-      modal = document.createElement("div");
-      modal.id = "alert-modal";
-      modal.style.position = "fixed";
-      modal.style.top = "20px";
-      modal.style.left = "50%";
-      modal.style.transform = "translateX(-50%)";
-      modal.style.padding = "14px 20px";
-      modal.style.borderRadius = "8px";
-      modal.style.fontSize = "14px";
-      modal.style.fontWeight = "500";
-      modal.style.color = "#fff";
-      modal.style.zIndex = "99999";
-      modal.style.boxShadow = "0 10px 30px rgba(0,0,0,0.2)";
-      modal.style.display = "none";
-      document.body.appendChild(modal);
-    }
-  
-    modal.textContent = message;
-    modal.style.background =
-      type === "error" ? "#e53935" : "#2e7d32";
-  
-    modal.style.display = "block";
-  
-    setTimeout(() => {
-      modal.style.display = "none";
-    }, 2500);
-  };
-  
-
 // Data Storage Key (single key for all data)
 const VAULT_DATA_KEY = 'measurement_vault_data';
 
@@ -39,304 +5,11 @@ const VAULT_DATA_KEY = 'measurement_vault_data';
 const LEGACY_CLIENTS_KEY = 'measurement_vault_clients';
 const LEGACY_MEASUREMENTS_KEY = 'measurement_vault_measurements';
 
-// ============================================
-// UX POLISH UTILITIES
-// ============================================
+// Logout state key
+const LOGOUT_STATE_KEY = 'measurement_vault_logged_out';
 
-// Escape HTML to prevent XSS
-function escapeHtml(text) {
-    if (text == null) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-// Modern Toast Notification System
-function showToast(message, type = 'success', duration = 3000) {
-    const container = document.getElementById('toast-container');
-    if (!container) return;
-    
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${type}`;
-    
-    const icon = type === 'success' ? '✓' : '✕';
-    toast.innerHTML = `
-        <span class="toast-icon">${icon}</span>
-        <span class="toast-message">${escapeHtml(message)}</span>
-        <button class="toast-close" aria-label="Close">×</button>
-    `;
-    
-    container.appendChild(toast);
-    
-    // Trigger animation
-    setTimeout(() => {
-        toast.classList.add('show');
-    }, 10);
-    
-    // Auto-remove after duration
-    const autoRemove = setTimeout(() => {
-        removeToast(toast);
-    }, duration);
-    
-    // Manual close
-    toast.querySelector('.toast-close').addEventListener('click', () => {
-        clearTimeout(autoRemove);
-        removeToast(toast);
-    });
-    
-    return toast;
-}
-
-function removeToast(toast) {
-    toast.classList.remove('show');
-    toast.classList.add('hide');
-    setTimeout(() => {
-        if (toast.parentNode) {
-            toast.parentNode.removeChild(toast);
-        }
-    }, 300);
-}
-
-// Convenience functions
-function showSuccessMessage(message, duration = 3000) {
-    return showToast(message, 'success', duration);
-}
-
-function showErrorMessage(message, duration = 3000) {
-    return showToast(message, 'error', duration);
-}
-
-// Disable/enable button with loading state and spinner
-function setButtonLoading(button, isLoading, loadingText = 'Saving...') {
-    if (!button) return;
-    
-    if (isLoading) {
-        button.disabled = true;
-        button.classList.add('loading');
-        // Store original text
-        if (!button.dataset.originalText) {
-            button.dataset.originalText = button.innerHTML;
-        }
-        // Add spinner to button text
-        button.innerHTML = `${loadingText} <span class="btn-spinner"></span>`;
-    } else {
-        button.disabled = false;
-        button.classList.remove('loading');
-        // Restore original text
-        if (button.dataset.originalText) {
-            button.innerHTML = button.dataset.originalText;
-            delete button.dataset.originalText;
-        }
-    }
-}
-
-// Auto-focus first input in a form
-function autoFocusFirstInput(formId) {
-    setTimeout(() => {
-        const form = document.getElementById(formId);
-        if (form) {
-            const firstInput = form.querySelector('input:not([type="hidden"]), textarea, select');
-            if (firstInput) {
-                firstInput.focus();
-            }
-        }
-    }, 100);
-}
-
-// Focus first invalid input in a form
-function focusFirstInvalidInput(form) {
-    if (!form) return;
-    
-    // Find first invalid input
-    const invalidInput = form.querySelector('input:invalid, textarea:invalid, select:invalid');
-    if (invalidInput) {
-        invalidInput.focus();
-        invalidInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        return true;
-    }
-    
-    // If no invalid input found, focus first required input that's empty
-    const requiredInputs = form.querySelectorAll('input[required], textarea[required], select[required]');
-    for (const input of requiredInputs) {
-        if (!input.value.trim()) {
-            input.focus();
-            input.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            return true;
-        }
-    }
-    
-    // Fallback to first input
-    const firstInput = form.querySelector('input:not([type="hidden"]), textarea, select');
-    if (firstInput) {
-        firstInput.focus();
-    }
-    return false;
-}
-
-// Show confirmation modal (replaces confirm())
-function showConfirmModal(title, message, onConfirm, onCancel = null) {
-    // Remove existing modal if any
-    const existingModal = document.getElementById('confirm-modal-overlay');
-    if (existingModal) {
-        existingModal.remove();
-    }
-    
-    const overlay = document.createElement('div');
-    overlay.id = 'confirm-modal-overlay';
-    overlay.className = 'confirm-modal-overlay';
-    
-    overlay.innerHTML = `
-        <div class="confirm-modal">
-            <div class="confirm-modal-title">${escapeHtml(title)}</div>
-            <div class="confirm-modal-message">${escapeHtml(message)}</div>
-            <div class="confirm-modal-actions">
-                <button class="confirm-modal-btn confirm-modal-btn-cancel">Cancel</button>
-                <button class="confirm-modal-btn confirm-modal-btn-confirm">Confirm</button>
-            </div>
-        </div>
-    `;
-    
-    document.body.appendChild(overlay);
-    
-    // Trigger animation
-    setTimeout(() => {
-        overlay.classList.add('show');
-    }, 10);
-    
-    // Handle cancel
-    overlay.querySelector('.confirm-modal-btn-cancel').addEventListener('click', () => {
-        overlay.classList.remove('show');
-        setTimeout(() => {
-            overlay.remove();
-            if (onCancel) onCancel();
-        }, 200);
-    });
-    
-    // Handle confirm
-    overlay.querySelector('.confirm-modal-btn-confirm').addEventListener('click', () => {
-        overlay.classList.remove('show');
-        setTimeout(() => {
-            overlay.remove();
-            if (onConfirm) onConfirm();
-        }, 200);
-    });
-    
-    // Close on overlay click
-    overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) {
-            overlay.classList.remove('show');
-            setTimeout(() => {
-                overlay.remove();
-                if (onCancel) onCancel();
-            }, 200);
-        }
-    });
-}
-
-// Show alert modal for success/error (simple, reliable implementation)
-function showAlertModal(message, type = "success") {
-    try {
-        let modal = document.getElementById("alert-modal");
-        if (!modal) {
-            // Create modal if it doesn't exist
-            modal = document.createElement("div");
-            modal.id = "alert-modal";
-            modal.style.position = "fixed";
-            modal.style.top = "50%";
-            modal.style.left = "50%";
-            modal.style.transform = "translate(-50%, -50%)";
-            modal.style.padding = "20px 30px";
-            modal.style.borderRadius = "10px";
-            modal.style.zIndex = "9999";
-            modal.style.display = "none";
-            modal.style.boxShadow = "0 4px 6px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.08)";
-            modal.style.fontSize = "16px";
-            modal.style.fontWeight = "500";
-            modal.style.textAlign = "center";
-            modal.style.minWidth = "250px";
-            modal.style.maxWidth = "400px";
-            modal.style.color = "#fff";
-            modal.style.transition = "opacity 0.2s ease";
-            
-            // Add overlay background
-            const overlay = document.createElement("div");
-            overlay.id = "alert-modal-overlay";
-            overlay.style.position = "fixed";
-            overlay.style.top = "0";
-            overlay.style.left = "0";
-            overlay.style.right = "0";
-            overlay.style.bottom = "0";
-            overlay.style.backgroundColor = "rgba(0, 0, 0, 0.5)";
-            overlay.style.zIndex = "9998";
-            overlay.style.display = "none";
-            document.body.appendChild(overlay);
-            
-            const messageDiv = document.createElement("div");
-            messageDiv.className = "modal-message";
-            modal.appendChild(messageDiv);
-            document.body.appendChild(modal);
-        }
-        
-        // Update message and style
-        const messageDiv = modal.querySelector(".modal-message");
-        if (messageDiv) {
-            messageDiv.innerText = message;
-        } else {
-            modal.innerText = message;
-        }
-        
-        // Set color based on type
-        modal.style.backgroundColor = type === "success" ? "#4CAF50" : "#f44336";
-        
-        // Show overlay
-        const overlay = document.getElementById("alert-modal-overlay");
-        if (overlay) {
-            overlay.style.display = "block";
-        }
-        
-        // Show modal
-        modal.style.display = "block";
-        modal.style.opacity = "1";
-        
-        // Auto-hide after 3 seconds
-        setTimeout(() => {
-            modal.style.opacity = "0";
-            if (overlay) overlay.style.opacity = "0";
-            setTimeout(() => {
-                modal.style.display = "none";
-                if (overlay) overlay.style.display = "none";
-            }, 200);
-        }, 3000);
-        
-    } catch (error) {
-        console.error('Error showing alert modal:', error);
-        // Fallback to alert if modal fails
-        alert(message);
-    }
-}
-
-// Make showAlertModal globally accessible immediately
-(function() {
-    if (typeof window !== 'undefined') {
-        window.showAlertModal = showAlertModal;
-        // Test it's accessible
-        if (typeof window.showAlertModal === 'function') {
-            console.log('✓ showAlertModal is now globally accessible');
-        } else {
-            console.error('✗ showAlertModal failed to attach to window');
-        }
-    }
-})();
-
-// Add fade-in animation to element
-function addFadeInAnimation(element) {
-    if (element) {
-        element.classList.add('fade-in-up');
-        setTimeout(() => {
-            element.classList.remove('fade-in-up');
-        }, 300);
-    }
-}
+// Current business session ID key
+const CURRENT_BUSINESS_ID_KEY = 'measurement_vault_current_business_id';
 
 // Garment Types by Sex (including Custom option)
 const GARMENT_TYPES = {
@@ -420,6 +93,32 @@ async function getBusiness() {
     const supabase = getSupabase();
     if (!supabase) return null;
     
+    // First, check if we have a stored business ID in session
+    const storedBusinessId = localStorage.getItem(CURRENT_BUSINESS_ID_KEY);
+    
+    if (storedBusinessId) {
+        // Fetch the specific business by ID
+        const { data, error } = await supabase
+            .from('businesses')
+            .select('*')
+            .eq('id', storedBusinessId)
+            .single();
+        
+        if (!error && data) {
+            // Convert to match old format
+            return {
+                id: data.id,
+                name: data.name,
+                email: data.email,
+                phone: data.phone,
+                createdAt: data.created_at
+            };
+        }
+        // If stored ID is invalid, clear it and fall through to default behavior
+        localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
+    }
+    
+    // Fallback: get first business (for backward compatibility)
     const { data, error } = await supabase
         .from('businesses')
         .select('*')
@@ -427,6 +126,9 @@ async function getBusiness() {
         .single();
     
     if (error || !data) return null;
+    
+    // Store the ID for future use
+    localStorage.setItem(CURRENT_BUSINESS_ID_KEY, data.id);
     
     // Convert to match old format
     return {
@@ -478,6 +180,9 @@ async function createBusiness(name, email, phone) {
             console.error('No data returned from insert');
             return null;
         }
+        
+        // Store the business ID in localStorage for session tracking
+        localStorage.setItem(CURRENT_BUSINESS_ID_KEY, data.id);
         
         // Convert to match old format
         return {
@@ -540,70 +245,112 @@ async function matchBusiness(name, email, phone) {
     );
 }
 
-// Session persistence keys
-const BUSINESS_SESSION_KEY = 'measurement_vault_business_session';
+// Find business by credentials (for login)
+async function findBusinessByCredentials(name, email, phone) {
+    const supabase = getSupabase();
+    if (!supabase) return null;
+    
+    try {
+        // Search for business matching all three credentials
+        const { data, error } = await supabase
+            .from('businesses')
+            .select('*')
+            .eq('name', name.trim())
+            .eq('email', email.trim().toLowerCase())
+            .eq('phone', phone.trim())
+            .limit(1);
+        
+        // Check if we got results and no error
+        if (error || !data || data.length === 0) {
+            return null;
+        }
+        
+        const business = data[0];
+        
+        // Store the business ID for session tracking
+        localStorage.setItem(CURRENT_BUSINESS_ID_KEY, business.id);
+        
+        // Convert to match old format
+        return {
+            id: business.id,
+            name: business.name,
+            email: business.email,
+            phone: business.phone,
+            createdAt: business.created_at
+        };
+    } catch (err) {
+        console.error('Exception in findBusinessByCredentials:', err);
+        return null;
+    }
+}
 
 // Logout - Set logged out state without deleting data
-let isLoggedOut = false;
-
 function logoutBusiness() {
-    isLoggedOut = true;
-    // Clear session from localStorage
-    localStorage.removeItem(BUSINESS_SESSION_KEY);
+    // Clear all localStorage items related to business data
+    localStorage.removeItem(VAULT_DATA_KEY);
+    localStorage.removeItem(LEGACY_CLIENTS_KEY);
+    localStorage.removeItem(LEGACY_MEASUREMENTS_KEY);
+    
+    // Clear current business session ID
+    localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
+    
+    // Set logged out state in localStorage (persists across refreshes)
+    // This ensures that after logout, refreshing or reopening the app always shows Business Registration
+    localStorage.setItem(LOGOUT_STATE_KEY, 'true');
+    
+    // Clear all sessionStorage items (clients, measurements, etc.)
+    try {
+        sessionStorage.clear();
+    } catch (e) {
+        console.warn('Error clearing sessionStorage:', e);
+    }
+    
+    // Reset all in-memory variables
+    currentClientId = null;
+    currentMeasurementId = null;
+    currentMeasurementDetailId = null;
+    previousScreen = 'home-screen';
+    recentMeasurementsOffset = 0;
+    recentMeasurementsExpanded = false;
+    
+    // Reset all forms
+    const businessLoginForm = document.getElementById('business-login-form');
+    if (businessLoginForm) {
+        businessLoginForm.reset();
+    }
+    
+    const businessSetupForm = document.getElementById('business-setup-form');
+    if (businessSetupForm) {
+        businessSetupForm.reset();
+    }
+    
+    const measurementForm = document.getElementById('measurement-form');
+    if (measurementForm) {
+        measurementForm.reset();
+        // Also reset the form state
+        resetMeasurementForm();
+    }
+    
+    const editBusinessForm = document.getElementById('edit-business-form');
+    if (editBusinessForm) {
+        editBusinessForm.reset();
+    }
+    
+    const editClientForm = document.getElementById('edit-client-form');
+    if (editClientForm) {
+        editClientForm.reset();
+    }
 }
 
 function loginBusiness() {
-    isLoggedOut = false;
-    // Save session to localStorage
-    saveBusinessSession();
+    // Clear logout state from localStorage
+    localStorage.removeItem(LOGOUT_STATE_KEY);
+    // Note: Business ID is already set when business is found/created
 }
 
 function isUserLoggedOut() {
-    return isLoggedOut;
-}
-
-// Save business session to localStorage
-async function saveBusinessSession() {
-    const business = await getBusiness();
-    if (business) {
-        localStorage.setItem(BUSINESS_SESSION_KEY, JSON.stringify({
-            businessId: business.id,
-            timestamp: Date.now()
-        }));
-    }
-}
-
-// Check if there's a saved business session
-async function hasSavedSession() {
-    const sessionData = localStorage.getItem(BUSINESS_SESSION_KEY);
-    if (!sessionData) return false;
-    
-    try {
-        const session = JSON.parse(sessionData);
-        // Verify the business still exists in Supabase
-        const business = await getBusiness();
-        if (business && business.id === session.businessId) {
-            return true;
-        } else {
-            // Business doesn't exist or ID doesn't match, clear invalid session
-            localStorage.removeItem(BUSINESS_SESSION_KEY);
-            return false;
-        }
-    } catch (e) {
-        // Invalid session data, clear it
-        localStorage.removeItem(BUSINESS_SESSION_KEY);
-        return false;
-    }
-}
-
-// Restore business session
-async function restoreBusinessSession() {
-    const hasSession = await hasSavedSession();
-    if (hasSession) {
-        isLoggedOut = false;
-        return true;
-    }
-    return false;
+    // Check localStorage for logout state (persists across refreshes)
+    return localStorage.getItem(LOGOUT_STATE_KEY) === 'true';
 }
 
 // Reset - Clear all data permanently
@@ -611,35 +358,39 @@ function resetBusiness() {
     localStorage.removeItem(VAULT_DATA_KEY);
     localStorage.removeItem(LEGACY_CLIENTS_KEY);
     localStorage.removeItem(LEGACY_MEASUREMENTS_KEY);
-    isLoggedOut = false;
+    // Clear current business session ID
+    localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
+    // Clear logout state as well (user will need to register again)
+    localStorage.removeItem(LOGOUT_STATE_KEY);
+    
+    // Clear sessionStorage
+    try {
+        sessionStorage.clear();
+    } catch (e) {
+        console.warn('Error clearing sessionStorage:', e);
+    }
 }
 
 // Initialize data structures if they don't exist
 async function initStorage() {
-    // Check if we need to show business setup
-    const hasBiz = await hasBusiness();
-    if (!hasBiz) {
+    // Step 1: Check if user is logged out (check localStorage for measurement_vault_logged_out)
+    // If logged out, always show Business Registration screen (regardless of existing business)
+    if (isUserLoggedOut()) {
         showScreen('business-setup-screen');
         return false;
     }
     
-    // Try to restore saved session first
-    const sessionRestored = await restoreBusinessSession();
-    if (sessionRestored) {
-        // Session restored successfully, user is logged in
-        return true;
-    }
-    
-    // No saved session, check if user is logged out
-    if (isUserLoggedOut()) {
-        showScreen('business-login-screen');
+    // Step 2: User is not logged out - check if business exists in Supabase
+    const hasBiz = await hasBusiness();
+    if (!hasBiz) {
+        // No business exists - show business registration screen
+        showScreen('business-setup-screen');
         return false;
     }
     
-    // No explicit logout state, but also no saved session
-    // This might be first time or session expired, show login screen
-    showScreen('business-login-screen');
-    return false;
+    // Step 3: Valid session exists - user is logged in and business exists
+    // Continue to dashboard (normal flow)
+    return true;
 }
 
 // Get all clients
@@ -754,36 +505,19 @@ async function updateClient(clientId, name, phone, sex) {
 // Delete client and all associated measurements
 async function deleteClient(clientId) {
     const supabase = getSupabase();
-    if (!supabase) return false;
+    if (!supabase) return;
     
-    try {
-        // Delete measurements first (cascade should handle this, but being explicit)
-        const { error: measurementsError } = await supabase
-            .from('measurements')
-            .delete()
-            .eq('client_id', clientId);
-        
-        if (measurementsError) {
-            console.error('Error deleting measurements:', measurementsError);
-            return false;
-        }
-        
-        // Delete client
-        const { error: clientError } = await supabase
-            .from('clients')
-            .delete()
-            .eq('id', clientId);
-        
-        if (clientError) {
-            console.error('Error deleting client:', clientError);
-            return false;
-        }
-        
-        return true;
-    } catch (error) {
-        console.error('Exception in deleteClient:', error);
-        return false;
-    }
+    // Delete measurements first (cascade should handle this, but being explicit)
+    await supabase
+        .from('measurements')
+        .delete()
+        .eq('client_id', clientId);
+    
+    // Delete client
+    await supabase
+        .from('clients')
+        .delete()
+        .eq('id', clientId);
 }
 
 // Save measurements (legacy function - kept for compatibility but will use individual operations)
@@ -1149,11 +883,11 @@ async function editMeasurement(measurementId, clientId) {
     const clients = await getClients();
     
     if (!Array.isArray(measurements)) {
-        showErrorMessage('Error loading measurements');
+        alert('Error loading measurements');
         return;
     }
     if (!Array.isArray(clients)) {
-        showErrorMessage('Error loading clients');
+        alert('Error loading clients');
         return;
     }
     
@@ -1161,7 +895,7 @@ async function editMeasurement(measurementId, clientId) {
     const client = clients.find(c => c.id === clientId);
     
     if (!measurement || !client) {
-        showErrorMessage('Measurement or client not found');
+        alert('Measurement or client not found');
         return;
     }
     
@@ -1231,35 +965,29 @@ async function editMeasurement(measurementId, clientId) {
 
 // Delete measurement
 async function deleteMeasurement(measurementId, clientId) {
-    showConfirmModal(
-        'Delete Measurement',
-        'Are you sure you want to delete this measurement? This action cannot be undone.',
-        async () => {
-            const supabase = getSupabase();
-            if (!supabase) {
-                console.error('Supabase client not available');
-                showAlertModal('Unable to connect to the database. Please try again.', 'error');
-                return;
-            }
-            
-            const { error } = await supabase
-                .from('measurements')
-                .delete()
-                .eq('id', measurementId);
-            
-            if (error) {
-                console.error('Error deleting measurement:', error);
-                showAlertModal('Failed to delete measurement. Please try again.', 'error');
-                return;
-            }
-            
-            showAlertModal('Measurement deleted successfully!', 'success');
-            // Return to client detail view
-            setTimeout(async () => {
-                await showClientDetails(clientId, previousScreen);
-            }, 500);
-        }
-    );
+    if (!confirm('Are you sure you want to delete this measurement?')) {
+        return;
+    }
+    
+    const supabase = getSupabase();
+    if (!supabase) {
+        console.error('Supabase client not available');
+        return;
+    }
+    
+    const { error } = await supabase
+        .from('measurements')
+        .delete()
+        .eq('id', measurementId);
+    
+    if (error) {
+        console.error('Error deleting measurement:', error);
+        alert('Error deleting measurement');
+        return;
+    }
+    
+    // Return to client detail view
+    await showClientDetails(clientId, previousScreen);
 }
 
 // Update business header name
@@ -1272,31 +1000,29 @@ async function updateBusinessHeader() {
             headerElement.textContent = businessName;
             headerElement.setAttribute('title', businessName);
         } else {
-            headerElement.textContent = 'Loading...';
+            headerElement.textContent = 'Measurement Vault';
             headerElement.removeAttribute('title');
         }
     }
 }
 
+// Update business name in all navbar instances
+async function updateNavbarBusinessName() {
+    const business = await getBusiness();
+    const businessName = (business && business.name && !isUserLoggedOut()) ? business.name : 'Measurement Vault';
+    
+    document.querySelectorAll('.navbar-business-name').forEach(element => {
+        element.textContent = businessName;
+        if (business && business.name) {
+            element.setAttribute('title', businessName);
+        } else {
+            element.removeAttribute('title');
+        }
+    });
+}
+
 // Screen Navigation
 function showScreen(screenId) {
-    // Auto-focus first input when showing forms
-    if (screenId === 'business-setup-screen') {
-        autoFocusFirstInput('business-setup-form');
-    } else if (screenId === 'business-login-screen') {
-        autoFocusFirstInput('business-login-form');
-    } else if (screenId === 'new-measurement-screen') {
-        autoFocusFirstInput('measurement-form');
-    } else if (screenId === 'edit-client-screen') {
-        autoFocusFirstInput('edit-client-form');
-    } else if (screenId === 'edit-business-screen') {
-        autoFocusFirstInput('edit-business-form');
-    } else if (screenId === 'search-screen') {
-        setTimeout(() => {
-            const searchInput = document.getElementById('search-input');
-            if (searchInput) searchInput.focus();
-        }, 100);
-    }
     document.querySelectorAll('.screen').forEach(screen => {
         screen.classList.remove('active');
     });
@@ -1306,6 +1032,9 @@ function showScreen(screenId) {
     if (screenId === 'home-screen') {
         updateBusinessHeader();
     }
+    
+    // Update business name in all navbar instances
+    updateNavbarBusinessName();
 }
 
 // Navigation Event Listeners
@@ -1356,115 +1085,81 @@ let currentMeasurementId = null;
 document.getElementById('measurement-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     
-    const submitButton = e.target.querySelector('button[type="submit"]');
-    setButtonLoading(submitButton, true);
+    // Handle custom garment type
+    let garmentType = document.getElementById('garment-type').value;
+    if (garmentType === 'Custom') {
+        const customGarmentName = document.getElementById('custom-garment-name').value.trim();
+        if (!customGarmentName) {
+            alert('Please enter a custom garment name');
+            return;
+        }
+        garmentType = customGarmentName;
+    }
     
-    try {
-        // Handle custom garment type
-        let garmentType = document.getElementById('garment-type').value;
-        if (garmentType === 'Custom') {
-            const customGarmentName = document.getElementById('custom-garment-name').value.trim();
-            if (!customGarmentName) {
-                showErrorMessage('Please enter a custom garment name');
-                setButtonLoading(submitButton, false);
-                const customInput = document.getElementById('custom-garment-name');
-                if (customInput) customInput.focus();
-                return;
+    // Collect custom fields from inline inputs
+    const customFields = {};
+    const customFieldGroups = document.querySelectorAll('#custom-fields-container .custom-field-group');
+    customFieldGroups.forEach(group => {
+        const input = group.querySelector('.custom-field-input');
+        if (input) {
+            const fieldName = input.getAttribute('data-field-name');
+            const fieldValue = parseFloat(input.value) || null;
+            if (fieldName && fieldValue !== null) {
+                customFields[fieldName] = fieldValue;
             }
-            garmentType = customGarmentName;
         }
-        
-        // Collect custom fields from inline inputs
-        const customFields = {};
-        const customFieldGroups = document.querySelectorAll('#custom-fields-container .custom-field-group');
-        customFieldGroups.forEach(group => {
-            const input = group.querySelector('.custom-field-input');
-            if (input) {
-                const fieldName = input.getAttribute('data-field-name');
-                const fieldValue = parseFloat(input.value) || null;
-                if (fieldName && fieldValue !== null) {
-                    customFields[fieldName] = fieldValue;
-                }
-            }
-        });
-        
-        const formData = {
-            clientName: document.getElementById('client-name').value.trim(),
-            phone: document.getElementById('phone-number').value.trim(),
-            sex: document.getElementById('client-sex').value,
-            garmentType: garmentType,
-            shoulder: parseFloat(document.getElementById('shoulder').value) || null,
-            chest: parseFloat(document.getElementById('chest').value) || null,
-            waist: parseFloat(document.getElementById('waist').value) || null,
-            sleeve: parseFloat(document.getElementById('sleeve').value) || null,
-            length: parseFloat(document.getElementById('length').value) || null,
-            neck: parseFloat(document.getElementById('neck').value) || null,
-            hip: parseFloat(document.getElementById('hip').value) || null,
-            inseam: parseFloat(document.getElementById('inseam').value) || null,
-            thigh: parseFloat(document.getElementById('thigh').value) || null,
-            seat: parseFloat(document.getElementById('seat').value) || null,
-            notes: document.getElementById('notes').value.trim(),
-            customFields: customFields
-        };
-        
-        if (!formData.clientName) {
-            showErrorMessage('Client name is required');
-            setButtonLoading(submitButton, false);
-            focusFirstInvalidInput(e.target);
-            return;
-        }
-        
-        if (!formData.sex) {
-            showErrorMessage('Sex is required');
-            setButtonLoading(submitButton, false);
-            focusFirstInvalidInput(e.target);
-            return;
-        }
-        
-        // Find or create client
-        const client = await findOrCreateClient(formData.clientName, formData.phone, formData.sex);
-        if (!client) {
-            setButtonLoading(submitButton, false);
-            showAlertModal('Failed to create or find client. Please try again.', 'error');
-            return;
-        }
-        
-        // Save measurement (create or update)
-        const measurement = await saveMeasurement(client.id, formData, currentMeasurementId);
-        
-        if (!measurement) {
-            setButtonLoading(submitButton, false);
-            showAlertModal('Failed to save measurement. Please try again.', 'error');
-            return;
-        }
-        
-        // Show success modal
-        const isEdit = !!currentMeasurementId;
-        showAlertModal(
-            isEdit ? 'Measurement updated successfully!' : 'Measurement saved successfully!',
-            'success'
-        );
-        
-        // Reset form and navigate after a brief delay
-        setTimeout(() => {
-            resetMeasurementForm();
-            // Return to appropriate screen
-            if (currentClientId && currentClientId === client.id) {
-                // We were adding/editing a measurement from client detail view
-                showClientDetails(client.id, previousScreen);
-            } else {
-                // Normal flow - return to home
-                showScreen('home-screen');
-                renderRecentMeasurements();
-            }
-        }, 500);
-        
-    } catch (error) {
-        console.error('Error in measurement form submission:', error);
-        setButtonLoading(submitButton, false);
-        showAlertModal('An error occurred while saving the measurement. Please try again.', 'error');
-    } finally {
-        setButtonLoading(submitButton, false);
+    });
+    
+    const formData = {
+        clientName: document.getElementById('client-name').value.trim(),
+        phone: document.getElementById('phone-number').value.trim(),
+        sex: document.getElementById('client-sex').value,
+        garmentType: garmentType,
+        shoulder: parseFloat(document.getElementById('shoulder').value) || null,
+        chest: parseFloat(document.getElementById('chest').value) || null,
+        waist: parseFloat(document.getElementById('waist').value) || null,
+        sleeve: parseFloat(document.getElementById('sleeve').value) || null,
+        length: parseFloat(document.getElementById('length').value) || null,
+        neck: parseFloat(document.getElementById('neck').value) || null,
+        hip: parseFloat(document.getElementById('hip').value) || null,
+        inseam: parseFloat(document.getElementById('inseam').value) || null,
+        thigh: parseFloat(document.getElementById('thigh').value) || null,
+        seat: parseFloat(document.getElementById('seat').value) || null,
+        notes: document.getElementById('notes').value.trim(),
+        customFields: customFields
+    };
+    
+    if (!formData.clientName) {
+        alert('Client name is required');
+        return;
+    }
+    
+    if (!formData.sex) {
+        alert('Sex is required');
+        return;
+    }
+    
+    // Find or create client
+    const client = await findOrCreateClient(formData.clientName, formData.phone, formData.sex);
+    if (!client) {
+        alert('Error creating/finding client');
+        return;
+    }
+    
+    // Save measurement (create or update)
+    await saveMeasurement(client.id, formData, currentMeasurementId);
+    
+    // Reset form
+    resetMeasurementForm();
+    
+    // Return to appropriate screen
+    if (currentClientId && currentClientId === client.id) {
+        // We were adding/editing a measurement from client detail view
+        await showClientDetails(client.id, previousScreen);
+    } else {
+        // Normal flow - return to home
+        showScreen('home-screen');
+        renderRecentMeasurements();
     }
 });
 
@@ -1514,7 +1209,7 @@ document.getElementById('client-sex').addEventListener('change', (e) => {
 // Add Measurement button from Client Detail View
 document.getElementById('add-measurement-from-details-btn').addEventListener('click', async () => {
     if (!currentClientId) {
-        showErrorMessage('Client not found');
+        alert('Client not found');
         return;
     }
     
@@ -1524,7 +1219,7 @@ document.getElementById('add-measurement-from-details-btn').addEventListener('cl
     const client = clients.find(c => c.id === currentClientId);
     
     if (!client) {
-        showErrorMessage('Client not found');
+        alert('Client not found');
         return;
     }
     
@@ -1622,24 +1317,12 @@ async function renderSearchResults(query) {
     }
     
     if (!query.trim()) {
-        resultsContainer.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon">🔍</div>
-                <div class="empty-state-text">Start typing to search</div>
-                <div class="empty-state-subtext">Search by client name or phone number</div>
-            </div>
-        `;
+        resultsContainer.innerHTML = '<div class="no-results">Start typing to search for clients...</div>';
         return;
     }
     
     if (clients.length === 0) {
-        resultsContainer.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon">🔍</div>
-                <div class="empty-state-text">No clients found</div>
-                <div class="empty-state-subtext">Try a different search term</div>
-            </div>
-        `;
+        resultsContainer.innerHTML = '<div class="no-results">No clients found</div>';
         return;
     }
     
@@ -1653,11 +1336,8 @@ async function renderSearchResults(query) {
         </div>
     `).join('');
     
-    // Add click listeners to client cards with animation
-    resultsContainer.querySelectorAll('.client-card').forEach((card, index) => {
-        setTimeout(() => {
-            addFadeInAnimation(card);
-        }, index * 50);
+    // Add click listeners to client cards
+    resultsContainer.querySelectorAll('.client-card').forEach(card => {
         card.addEventListener('click', async () => {
             const clientId = card.getAttribute('data-client-id');
             await showClientDetails(clientId, 'search-screen');
@@ -1682,7 +1362,7 @@ async function showClientDetails(clientId, fromScreen = 'search-screen') {
     
     const client = clients.find(c => c.id === clientId);
     if (!client) {
-        showErrorMessage('Client not found');
+        alert('Client not found');
         return;
     }
     
@@ -1875,6 +1555,13 @@ function formatDate(dateString) {
     return date.toLocaleDateString('en-US', options);
 }
 
+// Escape HTML to prevent XSS
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 // Get recent measurements (most recent first, with pagination)
 async function getRecentMeasurements(limit = null, offset = 0) {
     const measurements = await getMeasurements();
@@ -1907,7 +1594,7 @@ async function getRecentMeasurements(limit = null, offset = 0) {
 
 // Render Recent Measurements on Home Screen with pagination
 let recentMeasurementsOffset = 0;
-let recentMeasurementsLimit = 2; // Initial limit
+let recentMeasurementsLimit = 4; // Initial limit
 let recentMeasurementsExpanded = false;
 
 async function renderRecentMeasurements(resetPagination = true) {
@@ -1920,62 +1607,66 @@ async function renderRecentMeasurements(resetPagination = true) {
     const result = await getRecentMeasurements(limit, recentMeasurementsOffset);
     
     if (result.measurements.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon">📏</div>
-                <div class="empty-state-text">No measurements yet</div>
-                <div class="empty-state-subtext">Start by adding a new measurement</div>
-            </div>
-        `;
+        container.innerHTML = '<div class="recent-empty">No measurements yet. Start by adding a new measurement.</div>';
         return;
     }
     
     let html = result.measurements.map(item => `
         <div class="recent-item" data-measurement-id="${item.id}" data-client-id="${item.clientId}">
-            <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
-            <div class="recent-item-details">
-                <span class="recent-item-garment">${item.garment_type || 'No garment type'}</span>
+            <div class="recent-item-field">
+                <div class="recent-item-label">Name</div>
+                <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
+            </div>
+            <div class="recent-item-field">
+                <div class="recent-item-label">Garment</div>
+                <div class="recent-item-garment">${item.garment_type || 'No garment type'}</div>
+            </div>
+            <div class="recent-item-field">
+                <div class="recent-item-label">Date</div>
+                <div class="recent-item-date">${formatDateShort(item.date_created)}</div>
             </div>
         </div>
     `).join('');
     
-    // Add "See More" button if not expanded and there are more measurements
-    if (!recentMeasurementsExpanded && result.hasMore) {
-        html += `
-            <button id="see-more-measurements-btn" class="btn btn-secondary" style="margin-top: 16px;">
-                See More
-            </button>
-        `;
+    container.innerHTML = html;
+    
+    // Update header control (See More / Collapse button)
+    const controlContainer = document.getElementById('recent-measurements-control');
+    if (controlContainer) {
+        let controlHtml = '';
+        
+        // Add "See More" button if not expanded and there are more measurements
+        if (!recentMeasurementsExpanded && result.hasMore) {
+            controlHtml = `
+                <button id="see-more-measurements-btn" class="recent-control-btn">
+                    See more
+                </button>
+            `;
+        }
+        
+        // Add "Collapse" button if expanded
+        if (recentMeasurementsExpanded) {
+            controlHtml = `
+                <button id="collapse-measurements-btn" class="recent-control-btn">
+                    Collapse
+                </button>
+            `;
+        }
+        
+        controlContainer.innerHTML = controlHtml;
     }
     
-    // Add "Collapse" button if expanded
-    if (recentMeasurementsExpanded) {
-        html += `
-            <button id="collapse-measurements-btn" class="btn btn-secondary" style="margin-top: 16px;">
-                Collapse
-            </button>
-        `;
-    }
-    
-    // Add "Next" button if expanded and there are more measurements
+    // Add "Next" button at bottom if expanded and there are more measurements (for pagination)
     if (recentMeasurementsExpanded && result.hasMore) {
-        html += `
+        const nextBtnHtml = `
             <button id="next-measurements-btn" class="btn btn-secondary" style="margin-top: 16px;">
                 Next
             </button>
         `;
+        container.innerHTML += nextBtnHtml;
     }
     
-    container.innerHTML = html;
-    
     // Add click listeners for measurement items - open Measurement Detail View
-    // Add animations to recent items
-    container.querySelectorAll('.recent-item').forEach((item, index) => {
-        setTimeout(() => {
-            addFadeInAnimation(item);
-        }, index * 50);
-    });
-    
     container.querySelectorAll('.recent-item').forEach(item => {
         item.addEventListener('click', async () => {
             const measurementId = item.getAttribute('data-measurement-id');
@@ -1998,7 +1689,7 @@ async function renderRecentMeasurements(resetPagination = true) {
     if (collapseBtn) {
         collapseBtn.addEventListener('click', () => {
             recentMeasurementsExpanded = false;
-            recentMeasurementsLimit = 2;
+            recentMeasurementsLimit = 4;
             recentMeasurementsOffset = 0;
             renderRecentMeasurements(true);
         });
@@ -2014,9 +1705,17 @@ async function renderRecentMeasurements(resetPagination = true) {
                 const existingItems = container.querySelectorAll('.recent-item');
                 const nextItems = nextResult.measurements.map(item => `
                     <div class="recent-item" data-measurement-id="${item.id}" data-client-id="${item.clientId}">
-                        <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
-                        <div class="recent-item-details">
-                            <span class="recent-item-garment">${item.garment_type || 'No garment type'}</span>
+                        <div class="recent-item-field">
+                            <div class="recent-item-label">Name</div>
+                            <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
+                        </div>
+                        <div class="recent-item-field">
+                            <div class="recent-item-label">Garment</div>
+                            <div class="recent-item-garment">${item.garment_type || 'No garment type'}</div>
+                        </div>
+                        <div class="recent-item-field">
+                            <div class="recent-item-label">Date</div>
+                            <div class="recent-item-date">${formatDateShort(item.date_created)}</div>
                         </div>
                     </div>
                 `).join('');
@@ -2090,13 +1789,7 @@ async function renderClientsList() {
     countElement.textContent = `Clients: ${clients.length}`;
     
     if (clients.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon">👥</div>
-                <div class="empty-state-text">No clients yet</div>
-                <div class="empty-state-subtext">Start by adding a new measurement</div>
-            </div>
-        `;
+        container.innerHTML = '<div class="clients-empty">No clients yet. Start by adding a new measurement.</div>';
         return;
     }
     
@@ -2122,13 +1815,6 @@ async function renderClientsList() {
             </div>
         `;
     }).join('');
-    
-    // Add animations to list items
-    container.querySelectorAll('.client-list-item').forEach((item, index) => {
-        setTimeout(() => {
-            addFadeInAnimation(item);
-        }, index * 50);
-    });
     
     // Add click listeners for client content (to view details)
     container.querySelectorAll('.client-list-item-content').forEach(content => {
@@ -2181,14 +1867,14 @@ async function renderClientsList() {
 async function editClientFromList(clientId) {
     const clients = await getClients();
     if (!Array.isArray(clients)) {
-        showErrorMessage('Error loading clients');
+        alert('Error loading clients');
         return;
     }
     
     const client = clients.find(c => c.id === clientId);
     
     if (!client) {
-        showErrorMessage('Client not found');
+        alert('Client not found');
         return;
     }
     
@@ -2205,22 +1891,14 @@ async function editClientFromList(clientId) {
 
 // Delete client from list
 async function deleteClientFromList(clientId) {
-    showConfirmModal(
-        'Delete Client',
-        'Are you sure you want to delete this client? This will also delete all associated measurements. This action cannot be undone.',
-        async () => {
-            const success = await deleteClient(clientId);
-            if (success) {
-                showAlertModal('Client deleted successfully!', 'success');
-                // Refresh the clients list
-                setTimeout(async () => {
-                    await renderClientsList();
-                }, 500);
-            } else {
-                showAlertModal('Failed to delete client. Please try again.', 'error');
-            }
-        }
-    );
+    if (!confirm('Are you sure you want to delete this client? This will also delete all associated measurements.')) {
+        return;
+    }
+    
+    deleteClient(clientId);
+    
+    // Refresh the clients list
+    await renderClientsList();
 }
 
 // Show Measurement Detail View
@@ -2231,24 +1909,24 @@ async function showMeasurementDetail(measurementId) {
     const clients = await getClients();
     
     if (!Array.isArray(measurements)) {
-        showErrorMessage('Error loading measurements');
+        alert('Error loading measurements');
         return;
     }
     if (!Array.isArray(clients)) {
-        showErrorMessage('Error loading clients');
+        alert('Error loading clients');
         return;
     }
     
     const measurement = measurements.find(m => m.id === measurementId);
     
     if (!measurement) {
-        showErrorMessage('Measurement not found');
+        alert('Measurement not found');
         return;
     }
     
     const client = clients.find(c => c.id === measurement.client_id);
     if (!client) {
-        showErrorMessage('Client not found');
+        alert('Client not found');
         return;
     }
     
@@ -2426,10 +2104,24 @@ function setTheme(theme) {
 
 // Update theme toggle button icon
 function updateThemeToggleIcon(theme) {
+    // Moon icon SVG (for dark mode - clicking switches to light)
+    const moonIcon = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>`;
+    
+    // Sun icon SVG (for light mode - clicking switches to dark)
+    const sunIcon = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>`;
+    
+    const icon = theme === 'dark' ? moonIcon : sunIcon;
+    
+    // Update button with ID
     const themeToggleBtn = document.getElementById('theme-toggle-btn');
     if (themeToggleBtn) {
-        themeToggleBtn.textContent = theme === 'dark' ? '☀️' : '🌙';
+        themeToggleBtn.innerHTML = icon;
     }
+    
+    // Update all navbar theme toggle buttons
+    document.querySelectorAll('.btn-theme-toggle').forEach(btn => {
+        btn.innerHTML = icon;
+    });
 }
 
 // Toggle theme
@@ -2445,10 +2137,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const savedTheme = localStorage.getItem(THEME_STORAGE_KEY) || 'dark';
     setTheme(savedTheme);
     
-    const themeToggleBtn = document.getElementById('theme-toggle-btn');
+    // Find theme toggle button in active screen or home screen
+    const activeScreen = document.querySelector('.screen.active') || document.getElementById('home-screen');
+    const themeToggleBtn = activeScreen ? activeScreen.querySelector('.btn-theme-toggle') || document.getElementById('theme-toggle-btn') : document.getElementById('theme-toggle-btn');
     if (themeToggleBtn) {
         themeToggleBtn.addEventListener('click', toggleTheme);
     }
+    
+    // Also add listeners to all theme toggle buttons for consistency
+    document.querySelectorAll('.btn-theme-toggle').forEach(btn => {
+        if (!btn.hasAttribute('data-listener-added')) {
+            btn.setAttribute('data-listener-added', 'true');
+            btn.addEventListener('click', toggleTheme);
+        }
+    });
 });
 
 // Edit Client functionality
@@ -2456,20 +2158,20 @@ document.getElementById('edit-client-btn').addEventListener('click', async () =>
     closeAllMenuDropdowns();
     
     if (!currentClientId) {
-        showErrorMessage('Client not found');
+        alert('Client not found');
         return;
     }
     
     const clients = await getClients();
     if (!Array.isArray(clients)) {
-        showErrorMessage('Error loading clients');
+        alert('Error loading clients');
         return;
     }
     
     const client = clients.find(c => c.id === currentClientId);
     
     if (!client) {
-        showErrorMessage('Client not found');
+        alert('Client not found');
         return;
     }
     
@@ -2486,79 +2188,48 @@ document.getElementById('delete-client-btn').addEventListener('click', async () 
     closeAllMenuDropdowns();
     
     if (!currentClientId) {
-        showErrorMessage('Client not found');
+        alert('Client not found');
         return;
     }
     
-    showConfirmModal(
-        'Delete Client',
-        'Are you sure you want to delete this client? This will also delete all associated measurements. This action cannot be undone.',
-        async () => {
-            const success = await deleteClient(currentClientId);
-            if (success) {
-                showAlertModal('Client deleted successfully!', 'success');
-                // Return to Clients Screen
-                setTimeout(async () => {
-                    showScreen('clients-screen');
-                    await renderClientsList();
-                }, 500);
-            } else {
-                showAlertModal('Failed to delete client. Please try again.', 'error');
-            }
-        }
-    );
+    if (!confirm('Are you sure you want to delete this client? This will also delete all associated measurements.')) {
+        return;
+    }
+    
+    deleteClient(currentClientId);
+    
+    // Return to Clients Screen
+    showScreen('clients-screen');
+    await renderClientsList();
 });
 
 // Edit Client Form Submission
 document.getElementById('edit-client-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     
-    const submitButton = e.target.querySelector('button[type="submit"]');
-    setButtonLoading(submitButton, true);
-    
-    try {
-        if (!currentClientId) {
-            showErrorMessage('Client not found');
-            setButtonLoading(submitButton, false);
-            return;
-        }
-        
-        const name = document.getElementById('edit-client-name').value.trim();
-        const phone = document.getElementById('edit-client-phone').value.trim();
-        const sex = document.getElementById('edit-client-sex').value;
-        
-        if (!name) {
-            showErrorMessage('Client name is required');
-            setButtonLoading(submitButton, false);
-            focusFirstInvalidInput(e.target);
-            return;
-        }
-        
-        if (!sex) {
-            showErrorMessage('Sex is required');
-            setButtonLoading(submitButton, false);
-            focusFirstInvalidInput(e.target);
-            return;
-        }
-        
-        const updated = await updateClient(currentClientId, name, phone, sex);
-        if (!updated) {
-            setButtonLoading(submitButton, false);
-            showAlertModal('Failed to update client. Please try again.', 'error');
-            return;
-        }
-        
-        setButtonLoading(submitButton, false);
-        showAlertModal('Client updated successfully!', 'success');
-        // Return to Client Detail View
-        setTimeout(async () => {
-            await showClientDetails(currentClientId, previousScreen);
-        }, 500);
-    } catch (error) {
-        console.error('Error updating client:', error);
-        setButtonLoading(submitButton, false);
-        showAlertModal('An error occurred while updating the client. Please try again.', 'error');
+    if (!currentClientId) {
+        alert('Client not found');
+        return;
     }
+    
+    const name = document.getElementById('edit-client-name').value.trim();
+    const phone = document.getElementById('edit-client-phone').value.trim();
+    const sex = document.getElementById('edit-client-sex').value;
+    
+    if (!name) {
+        alert('Client name is required');
+        return;
+    }
+    
+    if (!sex) {
+        alert('Sex is required');
+        return;
+    }
+    
+    await updateClient(currentClientId, name, phone, sex);
+    
+    // Return to Client Detail View
+    await showClientDetails(currentClientId, previousScreen);
 });
 
 // Back button from Edit Client screen
@@ -2574,64 +2245,66 @@ document.getElementById('back-from-edit-client-btn').addEventListener('click', a
 document.getElementById('business-setup-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     
-    const submitButton = e.target.querySelector('button[type="submit"]');
-    setButtonLoading(submitButton, true);
+    const name = document.getElementById('business-name').value.trim();
+    const email = document.getElementById('business-email').value.trim();
+    const phone = document.getElementById('business-phone').value.trim();
     
-    try {
-        const name = document.getElementById('business-name').value.trim();
-        const email = document.getElementById('business-email').value.trim();
-        const phone = document.getElementById('business-phone').value.trim();
-        
-        if (!name) {
-            showErrorMessage('Business name is required');
-            setButtonLoading(submitButton, false);
-            focusFirstInvalidInput(e.target);
-            return;
-        }
-        
-        if (!email) {
-            showErrorMessage('Business email is required');
-            setButtonLoading(submitButton, false);
-            focusFirstInvalidInput(e.target);
-            return;
-        }
-        
-        if (!phone) {
-            showErrorMessage('Business phone is required');
-            setButtonLoading(submitButton, false);
-            focusFirstInvalidInput(e.target);
-            return;
-        }
-        
-        // Create business and initialize data
-        const business = await createBusiness(name, email, phone);
-        if (!business) {
-            setButtonLoading(submitButton, false);
-            showAlertModal('Failed to create business. Please check your connection and try again.', 'error');
-            return;
-        }
-        
-        // Save session and login
-        await saveBusinessSession();
+    if (!name) {
+        alert('Business name is required');
+        return;
+    }
+    
+    if (!email) {
+        alert('Business email is required');
+        return;
+    }
+    
+    if (!phone) {
+        alert('Business phone is required');
+        return;
+    }
+    
+    // Clear any existing business session before starting registration
+    // This ensures old businesses don't override new registrations
+    localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
+    localStorage.removeItem(LOGOUT_STATE_KEY);
+    
+    // First, check if a business with these credentials already exists
+    const existingBusiness = await findBusinessByCredentials(name, email, phone);
+    
+    if (existingBusiness) {
+        // Business exists - ID is already stored in findBusinessByCredentials
+        // Log them in
         loginBusiness();
         
-        setButtonLoading(submitButton, false);
-        showAlertModal('Business created successfully! Welcome to Measurement Vault.', 'success');
         // Update header and show home screen
-        setTimeout(async () => {
-            await updateBusinessHeader();
-            showScreen('home-screen');
-            await renderRecentMeasurements();
-        }, 500);
-    } catch (error) {
-        console.error('Error in business setup:', error);
-        setButtonLoading(submitButton, false);
-        showAlertModal('An error occurred while creating your business. Please try again.', 'error');
+        await updateBusinessHeader();
+        await updateNavbarBusinessName();
+        showScreen('home-screen');
+        await renderRecentMeasurements();
+    } else {
+        // Business doesn't exist - create new business
+        // Business ID will be stored in createBusiness function
+        const business = await createBusiness(name, email, phone);
+        if (!business) {
+            alert('Error creating business. Please check the browser console (F12) for details.');
+            return;
+        }
+        
+        // Log the user in after creating business (clears logout state)
+        loginBusiness();
+        
+        // Update header and show home screen
+        await updateBusinessHeader();
+        await updateNavbarBusinessName();
+        showScreen('home-screen');
+        await renderRecentMeasurements();
     }
 });
 
 // Settings button click
-document.getElementById('settings-btn').addEventListener('click', async () => {
+// Settings button handler - works with both ID and class
+async function handleSettingsClick() {
     // Display business info
     const business = await getBusiness();
     const infoContainer = document.getElementById('business-info-display');
@@ -2654,6 +2327,20 @@ document.getElementById('settings-btn').addEventListener('click', async () => {
     }
     
     showScreen('settings-screen');
+}
+
+// Add settings button listener to ID-based button
+const settingsBtn = document.getElementById('settings-btn');
+if (settingsBtn) {
+    settingsBtn.addEventListener('click', handleSettingsClick);
+}
+
+// Add settings button listeners to all navbar settings buttons
+document.querySelectorAll('.btn-settings').forEach(btn => {
+    if (!btn.hasAttribute('data-listener-added')) {
+        btn.setAttribute('data-listener-added', 'true');
+        btn.addEventListener('click', handleSettingsClick);
+    }
 });
 
 // Back from Settings
@@ -2686,128 +2373,80 @@ document.getElementById('edit-business-form').addEventListener('submit', async (
     const email = document.getElementById('edit-business-email').value.trim();
     const phone = document.getElementById('edit-business-phone').value.trim();
     
-    const submitButton = e.target.querySelector('button[type="submit"]');
-    setButtonLoading(submitButton, true);
-    
-    try {
-        if (!name) {
-            showErrorMessage('Business name is required');
-            setButtonLoading(submitButton, false);
-            focusFirstInvalidInput(e.target);
-            return;
-        }
-        
-        if (!email) {
-            showErrorMessage('Business email is required');
-            setButtonLoading(submitButton, false);
-            focusFirstInvalidInput(e.target);
-            return;
-        }
-        
-        if (!phone) {
-            showErrorMessage('Business phone is required');
-            setButtonLoading(submitButton, false);
-            focusFirstInvalidInput(e.target);
-            return;
-        }
-        
-        const updated = await updateBusiness(name, email, phone);
-        if (!updated) {
-            setButtonLoading(submitButton, false);
-            showAlertModal('Failed to update business details. Please try again.', 'error');
-            return;
-        }
-        
-        setButtonLoading(submitButton, false);
-        showAlertModal('Business details updated successfully!', 'success');
-        // Update header and settings
-        setTimeout(async () => {
-            await updateBusinessHeader();
-            
-            // Update the display in settings
-            const infoContainer = document.getElementById('business-info-display');
-            infoContainer.innerHTML = `
-                <div class="business-info-item">
-                    <span class="business-info-label">Name:</span>
-                    <span>${escapeHtml(name)}</span>
-                </div>
-                <div class="business-info-item">
-                    <span class="business-info-label">Email:</span>
-                    <span>${escapeHtml(email)}</span>
-                </div>
-                <div class="business-info-item">
-                    <span class="business-info-label">Phone:</span>
-                    <span>${escapeHtml(phone)}</span>
-                </div>
-            `;
-            
-            showScreen('settings-screen');
-        }, 500);
-    } catch (error) {
-        console.error('Error updating business:', error);
-        setButtonLoading(submitButton, false);
-        showAlertModal('An error occurred while updating business details. Please try again.', 'error');
+    if (!name) {
+        alert('Business name is required');
+        return;
     }
+    
+    if (!email) {
+        alert('Business email is required');
+        return;
+    }
+    
+    if (!phone) {
+        alert('Business phone is required');
+        return;
+    }
+    
+    await updateBusiness(name, email, phone);
+    
+    // Update header
+    await updateBusinessHeader();
+    
+    // Update the display in settings
+    const infoContainer = document.getElementById('business-info-display');
+    infoContainer.innerHTML = `
+        <div class="business-info-item">
+            <span class="business-info-label">Name:</span>
+            <span>${escapeHtml(name)}</span>
+        </div>
+        <div class="business-info-item">
+            <span class="business-info-label">Email:</span>
+            <span>${escapeHtml(email)}</span>
+        </div>
+        <div class="business-info-item">
+            <span class="business-info-label">Phone:</span>
+            <span>${escapeHtml(phone)}</span>
+        </div>
+    `;
+    
+    showScreen('settings-screen');
 });
 
 // Logout button click (no data deletion)
 document.getElementById('logout-btn').addEventListener('click', () => {
-    showConfirmModal(
-        'Logout',
-        'Are you sure you want to logout? Your data will be preserved.',
-        () => {
-            logoutBusiness();
-            showAlertModal('Logged out successfully!', 'success');
-            // Clear the login form and show login screen
-            setTimeout(() => {
-                document.getElementById('business-login-form').reset();
-                showScreen('business-login-screen');
-            }, 500);
-        }
-    );
+    if (!confirm('Are you sure you want to logout? Your data will be preserved.')) {
+        return;
+    }
+    
+    // Clear all business session data
+    logoutBusiness();
+    
+    // Show business setup screen (registration screen) after logout
+    showScreen('business-setup-screen');
 });
 
 // Business Login Form Submission
 document.getElementById('business-login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     
-    const submitButton = e.target.querySelector('button[type="submit"]');
-    setButtonLoading(submitButton, true);
+    const name = document.getElementById('login-business-name').value.trim();
+    const email = document.getElementById('login-business-email').value.trim();
+    const phone = document.getElementById('login-business-phone').value.trim();
     
-    try {
-        const name = document.getElementById('login-business-name').value.trim();
-        const email = document.getElementById('login-business-email').value.trim();
-        const phone = document.getElementById('login-business-phone').value.trim();
-        
-        if (!name || !email || !phone) {
-            showErrorMessage('Please enter all business details');
-            setButtonLoading(submitButton, false);
-            focusFirstInvalidInput(e.target);
-            return;
-        }
-        
-        // Check if credentials match
-        if (await matchBusiness(name, email, phone)) {
-            // Save session and login
-            await saveBusinessSession();
-            loginBusiness();
-            
-            setButtonLoading(submitButton, false);
-            showAlertModal('Logged in successfully! Welcome back.', 'success');
-            // Update header and show home
-            setTimeout(async () => {
-                await updateBusinessHeader();
-                showScreen('home-screen');
-                await renderRecentMeasurements();
-            }, 500);
-        } else {
-            setButtonLoading(submitButton, false);
-            showAlertModal('Business details do not match. Please check your information and try again.', 'error');
-        }
-    } catch (error) {
-        console.error('Error in business login:', error);
-        setButtonLoading(submitButton, false);
-        showAlertModal('An error occurred while logging in. Please try again.', 'error');
+    if (!name || !email || !phone) {
+        alert('Please enter all business details');
+        return;
+    }
+    
+    // Check if credentials match
+    if (await matchBusiness(name, email, phone)) {
+        loginBusiness();
+        await updateBusinessHeader();
+        showScreen('home-screen');
+        await renderRecentMeasurements();
+    } else {
+        alert('Business details do not match. Please check your information and try again.');
     }
 });
 
@@ -2879,9 +2518,7 @@ function showAddFieldModal() {
         const fieldValue = document.getElementById('new-field-value').value;
         
         if (!fieldName) {
-            showErrorMessage('Please enter a field name');
-            const fieldNameInput = document.getElementById('new-field-name');
-            if (fieldNameInput) fieldNameInput.focus();
+            alert('Please enter a field name');
             return;
         }
         
@@ -2989,7 +2626,7 @@ function initializeApp() {
         
         if (!window.supabaseClient) {
             console.error('Supabase client failed to initialize after 5 seconds');
-            showErrorMessage('Error: Unable to connect to Supabase. Please check your internet connection and environment variables.');
+            alert('Error: Unable to connect to Supabase. Please check your internet connection and environment variables.');
             return;
         }
         
@@ -2997,6 +2634,7 @@ function initializeApp() {
         const appInitialized = await initStorage();
         if (appInitialized) {
             await updateBusinessHeader();
+            await updateNavbarBusinessName();
             showScreen('home-screen');
             await renderRecentMeasurements();
             
