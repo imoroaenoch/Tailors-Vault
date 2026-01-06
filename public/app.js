@@ -11,6 +11,363 @@ const LOGOUT_STATE_KEY = 'measurement_vault_logged_out';
 // Current business session ID key
 const CURRENT_BUSINESS_ID_KEY = 'measurement_vault_current_business_id';
 
+// Device ID removed - using Supabase auth.user.id instead
+
+// ========== LOCALSTORAGE CACHE KEYS ==========
+const CACHE_BUSINESS_KEY = 'measurement_vault_cache_business';
+const CACHE_CLIENTS_KEY = 'measurement_vault_cache_clients';
+const CACHE_MEASUREMENTS_KEY = 'measurement_vault_cache_measurements';
+const CACHE_TIMESTAMP_KEY = 'measurement_vault_cache_timestamp';
+
+// ========== OFFLINE SYNC QUEUE KEY ==========
+const PENDING_SYNC_QUEUE_KEY = 'measurement_vault_pending_sync';
+
+// ========== IN-MEMORY STATE MANAGEMENT ==========
+// Cache for clients and measurements to avoid unnecessary re-fetching
+let clientsCache = null;
+let measurementsCache = null;
+let cacheTimestamp = null;
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+// Syncing state tracking
+const syncingClients = new Set(); // Track clients being synced
+const syncingMeasurements = new Set(); // Track measurements being synced
+let pendingMeasurementsRetryInterval = null; // Interval for retrying pending measurements
+
+// App ready state
+let appReady = false;
+let isHydrated = false;
+
+// ========== LOCALSTORAGE CACHE FUNCTIONS ==========
+// Safe JSON parsing with fallback
+function safeJsonParse(jsonString, fallback = null) {
+    if (!jsonString) return fallback;
+    try {
+        return JSON.parse(jsonString);
+    } catch (err) {
+        console.warn('Error parsing JSON from localStorage:', err);
+        return fallback;
+    }
+}
+
+// Safe JSON stringify
+function safeJsonStringify(data, fallback = null) {
+    try {
+        return JSON.stringify(data);
+    } catch (err) {
+        console.warn('Error stringifying data for localStorage:', err);
+        return fallback;
+    }
+}
+
+// Read business from localStorage cache
+function getCachedBusiness() {
+    const cached = localStorage.getItem(CACHE_BUSINESS_KEY);
+    return safeJsonParse(cached, null);
+}
+
+// Write business to localStorage cache
+function setCachedBusiness(business) {
+    if (!business) {
+        localStorage.removeItem(CACHE_BUSINESS_KEY);
+        return;
+    }
+    const json = safeJsonStringify(business);
+    if (json) {
+        localStorage.setItem(CACHE_BUSINESS_KEY, json);
+    }
+}
+
+// Read clients from localStorage cache
+function getCachedClients() {
+    const cached = localStorage.getItem(CACHE_CLIENTS_KEY);
+    const parsed = safeJsonParse(cached, null);
+    return Array.isArray(parsed) ? parsed : [];
+}
+
+// Write clients to localStorage cache
+function setCachedClients(clients) {
+    if (!Array.isArray(clients)) {
+        localStorage.removeItem(CACHE_CLIENTS_KEY);
+        return;
+    }
+    const json = safeJsonStringify(clients);
+    if (json) {
+        localStorage.setItem(CACHE_CLIENTS_KEY, json);
+    }
+}
+
+// Read measurements from localStorage cache
+function getCachedMeasurements() {
+    const cached = localStorage.getItem(CACHE_MEASUREMENTS_KEY);
+    const parsed = safeJsonParse(cached, null);
+    return Array.isArray(parsed) ? parsed : [];
+}
+
+// Write measurements to localStorage cache
+function setCachedMeasurements(measurements) {
+    if (!Array.isArray(measurements)) {
+        localStorage.removeItem(CACHE_MEASUREMENTS_KEY);
+        return;
+    }
+    const json = safeJsonStringify(measurements);
+    if (json) {
+        localStorage.setItem(CACHE_MEASUREMENTS_KEY, json);
+    }
+}
+
+// Get cache timestamp
+function getCacheTimestamp() {
+    const timestamp = localStorage.getItem(CACHE_TIMESTAMP_KEY);
+    return timestamp ? parseInt(timestamp, 10) : null;
+}
+
+// Set cache timestamp
+function setCacheTimestamp(timestamp = null) {
+    if (timestamp === null) {
+        timestamp = Date.now();
+    }
+    localStorage.setItem(CACHE_TIMESTAMP_KEY, timestamp.toString());
+}
+
+// Clear all localStorage cache
+function clearLocalStorageCache() {
+    localStorage.removeItem(CACHE_BUSINESS_KEY);
+    localStorage.removeItem(CACHE_CLIENTS_KEY);
+    localStorage.removeItem(CACHE_MEASUREMENTS_KEY);
+    localStorage.removeItem(CACHE_TIMESTAMP_KEY);
+}
+
+// ========== OFFLINE SYNC QUEUE FUNCTIONS ==========
+// Get pending sync queue
+function getPendingSyncQueue() {
+    const queue = localStorage.getItem(PENDING_SYNC_QUEUE_KEY);
+    return safeJsonParse(queue, []);
+}
+
+// Save pending sync queue
+function savePendingSyncQueue(queue) {
+    const json = safeJsonStringify(queue);
+    if (json) {
+        localStorage.setItem(PENDING_SYNC_QUEUE_KEY, json);
+    }
+}
+
+// Maximum retry attempts before showing error to user
+const MAX_SYNC_RETRIES = 5;
+
+// Add item to pending sync queue
+function addToPendingSyncQueue(action, data) {
+    const queue = getPendingSyncQueue();
+    const item = {
+        id: 'sync_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+        action: action, // 'create_client', 'update_client', 'delete_client', 'create_measurement', 'update_measurement', 'delete_measurement'
+        data: data,
+        timestamp: Date.now(),
+        retryCount: 0 // Track retry attempts
+    };
+    queue.push(item);
+    savePendingSyncQueue(queue);
+    updateSyncStatusIndicator();
+    return item.id;
+}
+
+// Remove item from pending sync queue
+function removeFromPendingSyncQueue(itemId) {
+    const queue = getPendingSyncQueue();
+    const filtered = queue.filter(item => item.id !== itemId);
+    savePendingSyncQueue(filtered);
+    updateSyncStatusIndicator();
+}
+
+// Clear pending sync queue
+function clearPendingSyncQueue() {
+    localStorage.removeItem(PENDING_SYNC_QUEUE_KEY);
+    updateSyncStatusIndicator();
+}
+
+// Check if online
+function isOnline() {
+    return navigator.onLine;
+}
+
+// Update sync status indicator
+function updateSyncStatusIndicator() {
+    const queue = getPendingSyncQueue();
+    const pendingCount = queue.length;
+    const isOffline = !isOnline();
+    
+    // Remove existing indicator
+    const existingIndicator = document.getElementById('sync-status-indicator');
+    if (existingIndicator) {
+        existingIndicator.remove();
+    }
+    
+    // Only show indicator if there are pending items or offline
+    if (pendingCount > 0 || isOffline) {
+        const indicator = document.createElement('div');
+        indicator.id = 'sync-status-indicator';
+        indicator.className = 'sync-status-indicator';
+        
+        if (isOffline) {
+            indicator.textContent = 'Offline mode';
+            indicator.className += ' sync-status-offline';
+        } else if (pendingCount > 0) {
+            indicator.textContent = `Syncing... (${pendingCount})`;
+            indicator.className += ' sync-status-syncing';
+        }
+        
+        // Add styles if not already added
+        if (!document.getElementById('sync-status-styles')) {
+            const style = document.createElement('style');
+            style.id = 'sync-status-styles';
+            style.textContent = `
+                .sync-status-indicator {
+                    position: fixed;
+                    top: 60px;
+                    right: 16px;
+                    background: var(--bg-card);
+                    color: var(--text-primary);
+                    padding: 6px 12px;
+                    border-radius: 6px;
+                    font-size: 12px;
+                    box-shadow: var(--shadow-md);
+                    z-index: 9998;
+                    pointer-events: none;
+                    opacity: 0.9;
+                }
+                .sync-status-offline {
+                    background: #f59e0b;
+                    color: white;
+                }
+                .sync-status-syncing {
+                    background: #3b82f6;
+                    color: white;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        document.body.appendChild(indicator);
+    }
+}
+
+// ========== TOAST NOTIFICATION SYSTEM ==========
+function showToast(message, type = 'info', duration = 3000) {
+    // Remove existing toasts
+    const existingToasts = document.querySelectorAll('.toast');
+    existingToasts.forEach(toast => toast.remove());
+    
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    
+    // Add styles if not already added
+    if (!document.getElementById('toast-styles')) {
+        const style = document.createElement('style');
+        style.id = 'toast-styles';
+        style.textContent = `
+            .toast {
+                position: fixed;
+                bottom: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: var(--bg-card);
+                color: var(--text-primary);
+                padding: 12px 20px;
+                border-radius: 8px;
+                box-shadow: var(--shadow-md);
+                z-index: 10000;
+                font-size: 14px;
+                max-width: 90%;
+                text-align: center;
+                animation: toastSlideIn 0.3s ease-out;
+            }
+            .toast-error {
+                background: #ef4444;
+                color: white;
+            }
+            .toast-success {
+                background: #10b981;
+                color: white;
+            }
+            @keyframes toastSlideIn {
+                from {
+                    opacity: 0;
+                    transform: translateX(-50%) translateY(20px);
+                }
+                to {
+                    opacity: 1;
+                    transform: translateX(-50%) translateY(0);
+                }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+    
+    document.body.appendChild(toast);
+    
+    // Auto remove after duration
+    setTimeout(() => {
+        toast.style.animation = 'toastSlideIn 0.3s ease-out reverse';
+        setTimeout(() => toast.remove(), 300);
+    }, duration);
+    
+    return toast;
+}
+
+// ========== LOADING STATE MANAGEMENT ==========
+function showLoadingScreen() {
+    const loader = document.createElement('div');
+    loader.id = 'app-loader';
+    loader.innerHTML = `
+        <div style="
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        ">
+            <div style="
+                text-align: center;
+                color: var(--text-primary);
+            ">
+                <div style="
+                    width: 40px;
+                    height: 40px;
+                    border: 3px solid var(--bg-secondary);
+                    border-top-color: var(--accent-yellow);
+                    border-radius: 50%;
+                    animation: spin 0.8s linear infinite;
+                    margin: 0 auto 16px;
+                "></div>
+                <div>Loading...</div>
+            </div>
+        </div>
+        <style>
+            @keyframes spin {
+                to { transform: rotate(360deg); }
+            }
+        </style>
+    `;
+    document.body.appendChild(loader);
+}
+
+function hideLoadingScreen() {
+    const loader = document.getElementById('app-loader');
+    if (loader) {
+        loader.style.opacity = '0';
+        loader.style.transition = 'opacity 0.3s';
+        setTimeout(() => loader.remove(), 300);
+    }
+    isHydrated = true;
+}
+
 // Garment Types by Sex (including Custom option)
 const GARMENT_TYPES = {
     Male: [
@@ -58,86 +415,124 @@ const GARMENT_FIELDS = {
 };
 
 // Get Supabase client (initialized in page.tsx)
-function getSupabase() {
-    if (typeof window !== 'undefined') {
-        // Wait a bit if client isn't ready yet (for async initialization)
+// Returns a promise that resolves when Supabase is ready
+async function getSupabaseAsync() {
+    if (typeof window === 'undefined') {
+        return null;
+    }
+    
+    // If already initialized, return immediately
         if (window.supabaseClient) {
             return window.supabaseClient;
         }
-        // Try to initialize it if it's not ready
-        if (!window.supabaseInitAttempted && typeof window.initSupabase === 'function') {
-            window.supabaseInitAttempted = true;
-            window.initSupabase();
-        }
-        console.error('Supabase client not initialized yet. Make sure Supabase is initialized in page.tsx');
+    
+    // Wait for Supabase to be initialized (max 5 seconds)
+    let attempts = 0;
+    while (!window.supabaseClient && attempts < 50) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+    }
+    
+    if (window.supabaseClient) {
+        return window.supabaseClient;
+    }
+    
+    console.warn('Supabase client not initialized after waiting. Make sure Supabase is initialized in page.tsx');
+    return null;
+}
+
+// Synchronous version - returns null if not ready (for non-critical calls)
+function getSupabase() {
+    if (typeof window !== 'undefined' && window.supabaseClient) {
+        return window.supabaseClient;
     }
     return null;
 }
 
-// Check if business exists
+// Check if business exists for current authenticated user
 async function hasBusiness() {
-    const supabase = getSupabase();
-    if (!supabase) return false;
+    const user = await getCurrentUser();
+    if (!user) {
+        return false;
+    }
     
+    const supabase = await getSupabaseAsync();
+    if (!supabase) {
+        return false;
+    }
+    
+    // Query business by user_id only
     const { data, error } = await supabase
         .from('businesses')
         .select('id')
+        .eq('user_id', user.id)
         .limit(1)
         .single();
     
     return !error && data && data.id;
 }
 
-// Get business
+// Get business for current authenticated user (single source of truth)
 async function getBusiness() {
-    const supabase = getSupabase();
-    if (!supabase) return null;
-    
-    // First, check if we have a stored business ID in session
-    const storedBusinessId = localStorage.getItem(CURRENT_BUSINESS_ID_KEY);
-    
-    if (storedBusinessId) {
-        // Fetch the specific business by ID
-        const { data, error } = await supabase
-            .from('businesses')
-            .select('*')
-            .eq('id', storedBusinessId)
-            .single();
-        
-        if (!error && data) {
-            // Convert to match old format
-            return {
-                id: data.id,
-                name: data.name,
-                email: data.email,
-                phone: data.phone,
-                createdAt: data.created_at
-            };
-        }
-        // If stored ID is invalid, clear it and fall through to default behavior
-        localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
+    const user = await getCurrentUser();
+    if (!user) {
+        return null;
     }
     
-    // Fallback: get first business (for backward compatibility)
+    const supabase = await getSupabaseAsync();
+    if (!supabase) {
+        return null;
+    }
+    
+    // Query business by user_id only - NO fallbacks
     const { data, error } = await supabase
         .from('businesses')
         .select('*')
+        .eq('user_id', user.id)
         .limit(1)
         .single();
     
-    if (error || !data) return null;
+    if (error || !data) {
+        return null;
+    }
     
-    // Store the ID for future use
-    localStorage.setItem(CURRENT_BUSINESS_ID_KEY, data.id);
-    
-    // Convert to match old format
+    // Return business data
     return {
         id: data.id,
         name: data.name,
-        email: data.email,
+        email: data.email || null,
         phone: data.phone,
         createdAt: data.created_at
     };
+}
+
+// Check if an ID is a temporary ID (starts with "temp_")
+function isTempId(id) {
+    return id && typeof id === 'string' && id.startsWith('temp_');
+}
+
+// Get real client ID from cache if temp ID is provided
+function getRealClientId(clientId) {
+    if (!isTempId(clientId)) {
+        return clientId; // Already a real ID
+    }
+    
+    // Try to find the real client ID in cache
+    const clients = getCachedClients();
+    const tempClient = clients.find(c => c.id === clientId);
+    if (tempClient) {
+        // Check if there's a real client with the same name/phone
+        const realClient = clients.find(c => 
+            !isTempId(c.id) && 
+            c.name === tempClient.name && 
+            c.phone === tempClient.phone
+        );
+        if (realClient) {
+            return realClient.id;
+        }
+    }
+    
+    return null; // Real ID not found yet
 }
 
 // Generate a UUID v4
@@ -154,48 +549,13 @@ function generateUUID() {
     });
 }
 
-// Create business and initialize data structure
+// Device ID function removed - using Supabase auth.user.id instead
+
+// Create business for authenticated user (removed - use createBusinessForUser in business setup form)
+// This function is kept for backward compatibility but should not be used
 async function createBusiness(name, email, phone) {
-    const supabase = getSupabase();
-    if (!supabase) {
-        console.error('Supabase client not available');
-        return null;
-    }
-    
-    try {
-        // Let Supabase generate the ID automatically (no manual ID assignment)
-        const { data, error } = await supabase
-            .from('businesses')
-            .insert([{ name: name.trim(), email: email.trim(), phone: phone.trim() }])
-            .select()
-            .single();
-        
-        if (error) {
-            console.error('Error creating business:', error);
-            console.error('Error details:', JSON.stringify(error, null, 2));
-            return null;
-        }
-        
-        if (!data) {
-            console.error('No data returned from insert');
-            return null;
-        }
-        
-        // Store the business ID in localStorage for session tracking
-        localStorage.setItem(CURRENT_BUSINESS_ID_KEY, data.id);
-        
-        // Convert to match old format
-        return {
-            id: data.id,
-            name: data.name,
-            email: data.email,
-            phone: data.phone,
-            createdAt: data.created_at
-        };
-    } catch (err) {
-        console.error('Exception in createBusiness:', err);
-        return null;
-    }
+    console.warn('createBusiness() is deprecated - business creation is handled in business setup form');
+    return null;
 }
 
 // Update business details
@@ -207,13 +567,22 @@ async function updateBusiness(name, email, phone) {
     const currentBusiness = await getBusiness();
     if (!currentBusiness) return null;
     
+    // Email is optional - use null if empty
+    const updateData = {
+            name: name.trim(),
+            phone: phone.trim()
+    };
+    
+    const emailTrimmed = email.trim();
+    if (emailTrimmed) {
+        updateData.email = emailTrimmed;
+    } else {
+        updateData.email = null;
+    }
+    
     const { data, error } = await supabase
         .from('businesses')
-        .update({
-            name: name.trim(),
-            email: email.trim(),
-            phone: phone.trim()
-        })
+        .update(updateData)
         .eq('id', currentBusiness.id)
         .select()
         .single();
@@ -229,36 +598,505 @@ async function updateBusiness(name, email, phone) {
         name: data.name,
         email: data.email,
         phone: data.phone,
+        email_verified: data.email_verified || false,
         createdAt: data.created_at
     };
 }
 
+// ========== EMAIL LINKING FUNCTIONS ==========
+
+// Request email verification using Supabase Auth magic link
+async function requestEmailVerification(email) {
+    const supabase = await getSupabaseAsync();
+    if (!supabase) {
+        alert('Unable to connect to database. Please try again.');
+        return false;
+    }
+    
+    const business = await getBusiness();
+    if (!business) {
+        alert('No business found. Please create a business first.');
+        return false;
+    }
+    
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+        alert('Please enter a valid email address.');
+        return false;
+    }
+    
+    try {
+        // Store the email temporarily in business record (unverified)
+        const { error: updateError } = await supabase
+            .from('businesses')
+            .update({
+                email: email.trim().toLowerCase(),
+                email_verified: false
+            })
+            .eq('id', business.id);
+        
+        if (updateError) {
+            console.error('Error updating business email:', updateError);
+            alert('Failed to update email. Please try again.');
+            return false;
+        }
+        
+        // Send magic link using Supabase Auth
+        // This is for linking email to existing device-based account
+        // Note: Supabase requires "Enable sign ups" to be ON for OTP to work
+        const { error: authError } = await supabase.auth.signInWithOtp({
+            email: email.trim().toLowerCase(),
+            options: {
+                // Set redirect URL to current page - Supabase will handle the callback
+                emailRedirectTo: `${window.location.origin}${window.location.pathname}`,
+                // Allow creating user if they don't exist (required for OTP to work)
+                shouldCreateUser: true
+            }
+        });
+        
+        if (authError) {
+            console.error('Error sending magic link:', authError);
+            console.error('Error details:', JSON.stringify(authError, null, 2));
+            
+            // Handle specific error codes
+            if (authError.code === 'otp_disabled' || authError.message?.includes('otp') || authError.message?.includes('Signups not allowed')) {
+                alert(
+                    'Email verification is not enabled in your Supabase project.\n\n' +
+                    'To fix this:\n' +
+                    '1. Go to your Supabase Dashboard\n' +
+                    '2. Navigate to Authentication > Providers > Email\n' +
+                    '3. Enable "Enable sign ups"\n' +
+                    '4. Enable "Confirm email" (optional but recommended)\n' +
+                    '5. Save the changes\n\n' +
+                    'Then try again.'
+                );
+                return false;
+            }
+            
+            // Show the actual error message to help debug
+            const errorMsg = authError.message || 'Unknown error';
+            alert(`Failed to send verification email: ${errorMsg}\n\nPlease check the console for more details.`);
+            return false;
+        }
+        
+        return true;
+    } catch (err) {
+        console.error('Exception in requestEmailVerification:', err);
+        alert('An error occurred. Please try again.');
+        return false;
+    }
+}
+
+// Link verified email to current business - email-first authentication
+// When email is verified, it becomes the primary identifier and locks in the account
+async function linkEmailToBusiness(email) {
+    const supabase = await getSupabaseAsync();
+    if (!supabase) return false;
+    
+    const business = await getBusiness();
+    if (!business) {
+        console.warn('No business found to link email to');
+        return false;
+    }
+    
+    try {
+        // Re-fetch the authenticated user to get real verification status from Supabase Auth
+        const { data: { user }, error: userError } = await supabase.auth.getUser();
+        
+        if (userError) {
+            console.error('Error getting authenticated user:', userError);
+            return false;
+        }
+        
+        // Check if email is verified in Supabase Auth (email_confirmed_at is set)
+        const isEmailVerified = user?.email_confirmed_at !== null && user?.email_confirmed_at !== undefined;
+        
+        // Check if another business with this verified email already exists
+        if (isEmailVerified) {
+            const { data: existingBusiness, error: checkError } = await supabase
+                .from('businesses')
+                .select('*')
+                .eq('email', email.trim().toLowerCase())
+                .eq('email_verified', true)
+                .neq('id', business.id) // Exclude current business
+                .limit(1)
+                .single();
+            
+            if (!checkError && existingBusiness) {
+                // Another business with verified email exists - merge data instead of creating duplicate
+                console.log('Business with verified email exists, merging data...');
+                await mergeBusinessData(business.id, existingBusiness.id);
+                // Switch to existing business
+                localStorage.setItem(CURRENT_BUSINESS_ID_KEY, existingBusiness.id);
+                setCachedBusiness({
+                    id: existingBusiness.id,
+                    name: existingBusiness.name,
+                    email: existingBusiness.email,
+                    phone: existingBusiness.phone,
+                    email_verified: true,
+                    createdAt: existingBusiness.created_at
+                });
+                return true;
+            }
+        }
+        
+        // Update current business with verified email (email becomes primary identifier)
+        const { error } = await supabase
+            .from('businesses')
+            .update({
+                email: email.trim().toLowerCase(),
+                email_verified: isEmailVerified, // Use real Supabase Auth verification status
+                // Clear old token fields if they exist (backward compatibility)
+                verification_token: null,
+                verification_token_expires_at: null
+            })
+            .eq('id', business.id);
+        
+        if (error) {
+            console.error('Error linking email to business:', error);
+            return false;
+        }
+        
+        // If email is verified, sync all local data to this email-based account
+        if (isEmailVerified) {
+            await syncLocalDataToEmailAccount(business.id);
+        }
+        
+        return isEmailVerified;
+    } catch (err) {
+        console.error('Exception in linkEmailToBusiness:', err);
+        return false;
+    }
+}
+
+// Merge data from source business to target business (prevent duplicates)
+async function mergeBusinessData(sourceBusinessId, targetBusinessId) {
+    const supabase = await getSupabaseAsync();
+    if (!supabase) return;
+    
+    try {
+        // Get all clients and measurements from source business
+        const { data: sourceClients } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('business_id', sourceBusinessId);
+        
+        const { data: sourceMeasurements } = await supabase
+            .from('measurements')
+            .select('*')
+            .eq('business_id', sourceBusinessId);
+        
+        // Get existing clients and measurements from target business
+        const { data: targetClients } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('business_id', targetBusinessId);
+        
+        // Merge clients (avoid duplicates by name+phone)
+        if (sourceClients && sourceClients.length > 0) {
+            for (const sourceClient of sourceClients) {
+                const exists = targetClients?.some(tc => 
+                    tc.name === sourceClient.name && tc.phone === sourceClient.phone
+                );
+                
+                if (!exists) {
+                    // Move client to target business
+                    await supabase
+                        .from('clients')
+                        .update({ business_id: targetBusinessId })
+                        .eq('id', sourceClient.id);
+                } else {
+                    // Delete duplicate client
+                    await supabase
+                        .from('clients')
+                        .delete()
+                        .eq('id', sourceClient.id);
+                }
+            }
+        }
+        
+        // Move all measurements to target business
+        if (sourceMeasurements && sourceMeasurements.length > 0) {
+            for (const measurement of sourceMeasurements) {
+                // Find corresponding client in target business
+                const targetClient = targetClients?.find(tc => 
+                    tc.name === (sourceClients?.find(sc => sc.id === measurement.client_id)?.name || '')
+                );
+                
+                if (targetClient) {
+                    await supabase
+                        .from('measurements')
+                        .update({ 
+                            business_id: targetBusinessId,
+                            client_id: targetClient.id
+                        })
+                        .eq('id', measurement.id);
+                } else {
+                    // Delete measurement if no matching client
+                    await supabase
+                        .from('measurements')
+                        .delete()
+                        .eq('id', measurement.id);
+                }
+            }
+        }
+        
+        // Delete source business (data has been merged)
+        await supabase
+            .from('businesses')
+            .delete()
+            .eq('id', sourceBusinessId);
+    } catch (err) {
+        console.error('Error merging business data:', err);
+    }
+}
+
+// Sync local data to email-based account - REMOVED (using user_id now, no sync needed)
+async function syncLocalDataToEmailAccount(businessId) {
+    console.warn('syncLocalDataToEmailAccount() is deprecated - data is automatically synced via user_id');
+}
+
+// Sync data from email (for new devices)
+async function syncDataFromEmail(email) {
+    const supabase = getSupabase();
+    if (!supabase) {
+        alert('Unable to connect to database. Please try again.');
+        return false;
+    }
+    
+    try {
+        // Find business with verified email
+        const { data: businesses, error } = await supabase
+            .from('businesses')
+            .select('*')
+            .eq('email', email.trim().toLowerCase())
+            .eq('email_verified', true)
+            .limit(1);
+        
+        if (error || !businesses || businesses.length === 0) {
+            alert('No verified business found with this email address.');
+            return false;
+        }
+        
+        const sourceBusiness = businesses[0];
+        const currentDeviceId = getDeviceId();
+        
+        // Check if current device already has a business
+        const currentBusiness = await getBusiness();
+        
+        if (currentBusiness) {
+            // Merge data: copy clients and measurements from source to current
+            // First, get all clients from source business
+            const { data: sourceClients } = await supabase
+                .from('clients')
+                .select('*')
+                .eq('business_id', sourceBusiness.id);
+            
+            if (sourceClients && sourceClients.length > 0) {
+                // Create a mapping of old client IDs to new client IDs
+                const clientIdMap = new Map();
+                
+                // Copy clients
+                for (const sourceClient of sourceClients) {
+                    const { data: newClient } = await supabase
+                        .from('clients')
+                        .insert([{
+                            business_id: currentBusiness.id,
+                            name: sourceClient.name,
+                            phone: sourceClient.phone,
+                            sex: sourceClient.sex
+                        }])
+                        .select()
+                        .single();
+                    
+                    if (newClient) {
+                        clientIdMap.set(sourceClient.id, newClient.id);
+                    }
+                }
+                
+                // Copy measurements
+                const { data: sourceMeasurements } = await supabase
+                    .from('measurements')
+                    .select('*')
+                    .eq('business_id', sourceBusiness.id);
+                
+                if (sourceMeasurements && sourceMeasurements.length > 0) {
+                    for (const sourceMeasurement of sourceMeasurements) {
+                        const newClientId = clientIdMap.get(sourceMeasurement.client_id);
+                        if (newClientId) {
+                            await supabase
+                                .from('measurements')
+                                .insert([{
+                                    business_id: currentBusiness.id,
+                                    client_id: newClientId,
+                                    garment_type: sourceMeasurement.garment_type,
+                                    sex: sourceMeasurement.sex,
+                                    shoulder: sourceMeasurement.shoulder,
+                                    chest: sourceMeasurement.chest,
+                                    waist: sourceMeasurement.waist,
+                                    sleeve: sourceMeasurement.sleeve,
+                                    length: sourceMeasurement.length,
+                                    neck: sourceMeasurement.neck,
+                                    hip: sourceMeasurement.hip,
+                                    inseam: sourceMeasurement.inseam,
+                                    thigh: sourceMeasurement.thigh,
+                                    seat: sourceMeasurement.seat,
+                                    custom_fields: sourceMeasurement.custom_fields,
+                                    notes: sourceMeasurement.notes
+                                }]);
+                        }
+                    }
+                }
+            }
+            
+            // Link current business to email
+            await supabase
+                .from('businesses')
+                .update({
+                    email: sourceBusiness.email,
+                    email_verified: true
+                })
+                .eq('id', currentBusiness.id);
+        } else {
+            // No current business - update source business to use current user_id
+            await supabase
+                .from('businesses')
+                .update({
+                    user_id: user.id
+                })
+                .eq('id', sourceBusiness.id);
+        }
+        
+        return true;
+    } catch (err) {
+        console.error('Exception in syncDataFromEmail:', err);
+        alert('An error occurred while syncing data. Please try again.');
+        return false;
+    }
+}
+
+// Render email linking status in settings
+async function renderEmailLinkingStatus() {
+    const business = await getBusiness();
+    if (!business) return;
+    
+    const statusContainer = document.getElementById('email-linking-status');
+    const formContainer = document.getElementById('email-linking-form');
+    const pendingContainer = document.getElementById('email-verification-pending');
+    
+    if (!statusContainer || !formContainer || !pendingContainer) return;
+    
+    // Check Supabase Auth user for real verification status
+    const supabase = await getSupabaseAsync();
+    let isEmailVerified = business.email_verified || false;
+    
+    if (supabase && business.email) {
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user?.email === business.email.toLowerCase()) {
+                // Email matches - check Supabase Auth verification status
+                isEmailVerified = user?.email_confirmed_at !== null && user?.email_confirmed_at !== undefined;
+                
+                // Update database if status changed
+                if (isEmailVerified !== business.email_verified) {
+                    await supabase
+                        .from('businesses')
+                        .update({ email_verified: isEmailVerified })
+                        .eq('id', business.id);
+                }
+            }
+        } catch (err) {
+            console.warn('Error checking Supabase Auth user status:', err);
+            // Fall back to database status
+        }
+    }
+    
+    // Check if there's a pending verification
+    const hasPendingVerification = business.email && !isEmailVerified;
+    
+    if (isEmailVerified && business.email) {
+        // Email is verified
+        statusContainer.innerHTML = `
+            <div class="email-status-verified">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style="color: #10b981; margin-right: 8px;">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                    <polyline points="22 4 12 14.01 9 11.01"></polyline>
+                </svg>
+                <span>Email verified: ${escapeHtml(business.email)}</span>
+            </div>
+        `;
+        formContainer.style.display = 'none';
+        pendingContainer.style.display = 'none';
+    } else if (hasPendingVerification) {
+        // Verification pending
+        statusContainer.innerHTML = `
+            <div class="email-status-pending">
+                <span>Verification pending for: ${escapeHtml(business.email)}</span>
+            </div>
+        `;
+        formContainer.style.display = 'none';
+        pendingContainer.style.display = 'block';
+    } else {
+        // No email linked
+        statusContainer.innerHTML = `
+            <div class="email-status-unlinked">
+                <span>No email linked</span>
+            </div>
+        `;
+        formContainer.style.display = 'block';
+        pendingContainer.style.display = 'none';
+    }
+}
+
 // Check if business credentials match (for login)
+// Email is optional - only match if both are provided or both are empty/null
 async function matchBusiness(name, email, phone) {
     const business = await getBusiness();
     if (!business) return false;
     
-    return (
-        business.name.toLowerCase().trim() === name.toLowerCase().trim() &&
-        business.email.toLowerCase().trim() === email.toLowerCase().trim() &&
-        business.phone.trim() === phone.trim()
-    );
+    // Name and phone must match
+    const nameMatch = business.name.toLowerCase().trim() === name.toLowerCase().trim();
+    const phoneMatch = business.phone.trim() === phone.trim();
+    
+    // Email matching: if email is provided, it must match; if not provided, business email can be null/empty
+    const emailTrimmed = email.trim();
+    const businessEmail = business.email ? business.email.toLowerCase().trim() : '';
+    const emailMatch = emailTrimmed ? (businessEmail === emailTrimmed.toLowerCase()) : (!businessEmail);
+    
+    return nameMatch && phoneMatch && emailMatch;
 }
 
-// Find business by credentials (for login)
+// Find business by credentials (for login) - only for current device
+// Email is optional - only match if provided
 async function findBusinessByCredentials(name, email, phone) {
-    const supabase = getSupabase();
-    if (!supabase) return null;
+    const supabase = await getSupabaseAsync();
+    if (!supabase) {
+        console.error('Supabase client not available for findBusinessByCredentials');
+        return null;
+    }
+    
+    const deviceId = getDeviceId();
     
     try {
-        // Search for business matching all three credentials
-        const { data, error } = await supabase
+        // Build query - email is optional
+        let query = supabase
             .from('businesses')
             .select('*')
             .eq('name', name.trim())
-            .eq('email', email.trim().toLowerCase())
             .eq('phone', phone.trim())
-            .limit(1);
+            .eq('device_id', deviceId);
+        
+        // Only match email if provided
+        const emailTrimmed = email.trim();
+        if (emailTrimmed) {
+            query = query.eq('email', emailTrimmed.toLowerCase());
+        } else {
+            // If no email provided, match businesses with null or empty email
+            query = query.or('email.is.null,email.eq.');
+        }
+        
+        const { data, error } = await query.limit(1);
         
         // Check if we got results and no error
         if (error || !data || data.length === 0) {
@@ -271,13 +1109,19 @@ async function findBusinessByCredentials(name, email, phone) {
         localStorage.setItem(CURRENT_BUSINESS_ID_KEY, business.id);
         
         // Convert to match old format
-        return {
+        const businessObj = {
             id: business.id,
             name: business.name,
             email: business.email,
             phone: business.phone,
+            email_verified: business.email_verified || false,
             createdAt: business.created_at
         };
+        
+        // Cache business in localStorage
+        setCachedBusiness(businessObj);
+        
+        return businessObj;
     } catch (err) {
         console.error('Exception in findBusinessByCredentials:', err);
         return null;
@@ -285,25 +1129,25 @@ async function findBusinessByCredentials(name, email, phone) {
 }
 
 // Logout - Set logged out state without deleting data
-function logoutBusiness() {
-    // Clear all localStorage items related to business data
-    localStorage.removeItem(VAULT_DATA_KEY);
-    localStorage.removeItem(LEGACY_CLIENTS_KEY);
-    localStorage.removeItem(LEGACY_MEASUREMENTS_KEY);
+async function logoutBusiness() {
+    // Sign out from Supabase
+    const supabase = await getSupabaseAsync();
+    if (supabase) {
+        await supabase.auth.signOut();
+    }
     
-    // Clear current business session ID
-    localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
+    // Clear all localStorage
+    localStorage.clear();
     
-    // Set logged out state in localStorage (persists across refreshes)
-    // This ensures that after logout, refreshing or reopening the app always shows Business Registration
-    localStorage.setItem(LOGOUT_STATE_KEY, 'true');
-    
-    // Clear all sessionStorage items (clients, measurements, etc.)
+    // Clear all sessionStorage
     try {
         sessionStorage.clear();
     } catch (e) {
         console.warn('Error clearing sessionStorage:', e);
     }
+    
+    // Clear cache
+    clearCache();
     
     // Reset all in-memory variables
     currentClientId = null;
@@ -369,6 +1213,9 @@ function resetBusiness() {
     } catch (e) {
         console.warn('Error clearing sessionStorage:', e);
     }
+    
+    // Clear cache
+    clearCache();
 }
 
 // Initialize data structures if they don't exist
@@ -393,75 +1240,90 @@ async function initStorage() {
     return true;
 }
 
-// Get all clients
-async function getClients() {
-    const supabase = getSupabase();
-    if (!supabase) return [];
+// Get all clients (with caching) - REMOVED (using new getClients() that uses user_id)
+
+// Add client to cache (optimistic update)
+function addClientToCache(client) {
+    if (!clientsCache) clientsCache = [];
+    clientsCache.unshift(client); // Add to beginning
+    cacheTimestamp = Date.now();
+    setCacheTimestamp(cacheTimestamp);
     
-    const business = await getBusiness();
-    if (!business) return [];
-    
-    const { data, error } = await supabase
-        .from('clients')
-        .select('*')
-        .eq('business_id', business.id)
-        .order('created_at', { ascending: false });
-    
-    if (error) {
-        console.error('Error fetching clients:', error);
-        return [];
-    }
-    
-    // Convert to match old format - ensure always returns array
-    const normalizedData = Array.isArray(data) ? data : [];
-    return normalizedData.map(c => ({
-        id: c.id,
-        name: c.name,
-        phone: c.phone || '',
-        sex: c.sex || '',
-        createdAt: c.created_at
-    }));
+    // Update localStorage cache
+    setCachedClients(clientsCache);
 }
 
-// Get all measurements
-async function getMeasurements() {
-    const supabase = getSupabase();
-    if (!supabase) return [];
-    
-    const business = await getBusiness();
-    if (!business) return [];
-    
-    const { data, error } = await supabase
-        .from('measurements')
-        .select('*')
-        .eq('business_id', business.id)
-        .order('created_at', { ascending: false });
-    
-    if (error) {
-        console.error('Error fetching measurements:', error);
-        return [];
+// Update client in cache
+function updateClientInCache(clientId, updates) {
+    if (!clientsCache) return;
+    const index = clientsCache.findIndex(c => c.id === clientId);
+    if (index !== -1) {
+        clientsCache[index] = { ...clientsCache[index], ...updates };
+        cacheTimestamp = Date.now();
+        setCacheTimestamp(cacheTimestamp);
+        
+        // Update localStorage cache
+        setCachedClients(clientsCache);
     }
+}
+
+// Remove client from cache
+function removeClientFromCache(clientId) {
+    if (!clientsCache) return;
+    clientsCache = clientsCache.filter(c => c.id !== clientId);
+    cacheTimestamp = Date.now();
+    setCacheTimestamp(cacheTimestamp);
     
-    // Convert to legacy format for compatibility - ensure always returns array
-    const normalizedData = Array.isArray(data) ? data : [];
-    return normalizedData.map(m => ({
-        id: m.id,
-        client_id: m.client_id,
-        garment_type: m.garment_type || null,
-        date_created: m.created_at,
-        shoulder: m.shoulder || null,
-        chest: m.chest || null,
-        waist: m.waist || null,
-        sleeve: m.sleeve || null,
-        length: m.length || null,
-        neck: m.neck || null,
-        hip: m.hip || null,
-        inseam: m.inseam || null,
-        thigh: m.thigh || null,
-        seat: m.seat || null,
-        notes: m.notes || null,
-        customFields: m.custom_fields || {}
-    }));
+    // Update localStorage cache
+    setCachedClients(clientsCache);
+}
+
+// Get all measurements (with caching) - REMOVED (using new getMeasurements() that uses user_id)
+
+// Add measurement to cache (optimistic update)
+function addMeasurementToCache(measurement) {
+    if (!measurementsCache) measurementsCache = [];
+    measurementsCache.unshift(measurement); // Add to beginning
+    cacheTimestamp = Date.now();
+    setCacheTimestamp(cacheTimestamp);
+    
+    // Update localStorage cache
+    setCachedMeasurements(measurementsCache);
+}
+
+// Update measurement in cache
+function updateMeasurementInCache(measurementId, updates) {
+    if (!measurementsCache) return;
+    const index = measurementsCache.findIndex(m => m.id === measurementId);
+    if (index !== -1) {
+        measurementsCache[index] = { ...measurementsCache[index], ...updates };
+        cacheTimestamp = Date.now();
+        setCacheTimestamp(cacheTimestamp);
+        
+        // Update localStorage cache
+        setCachedMeasurements(measurementsCache);
+    }
+}
+
+// Remove measurement from cache
+function removeMeasurementFromCache(measurementId) {
+    if (!measurementsCache) return;
+    measurementsCache = measurementsCache.filter(m => m.id !== measurementId);
+    cacheTimestamp = Date.now();
+    setCacheTimestamp(cacheTimestamp);
+    
+    // Update localStorage cache
+    setCachedMeasurements(measurementsCache);
+}
+
+// Clear cache (for logout or business change)
+function clearCache() {
+    clientsCache = null;
+    measurementsCache = null;
+    cacheTimestamp = null;
+    
+    // Clear localStorage cache
+    clearLocalStorageCache();
 }
 
 // Save clients (legacy function - kept for compatibility but will use individual operations)
@@ -473,51 +1335,147 @@ async function saveClients(clients) {
 
 // Update client
 async function updateClient(clientId, name, phone, sex) {
-    const supabase = getSupabase();
-    if (!supabase) return null;
+    // Update cache immediately (optimistic)
+    const cachedClient = clientsCache?.find(c => c.id === clientId);
+    const optimisticUpdate = {
+        name: name.trim(),
+        phone: phone ? phone.trim() : '',
+        sex: sex || ''
+    };
     
-    const { data, error } = await supabase
-        .from('clients')
-        .update({
-            name: name.trim(),
-            phone: phone ? phone.trim() : null,
-            sex: sex || null
-        })
-        .eq('id', clientId)
-        .select()
-        .single();
-    
-    if (error) {
-        console.error('Error updating client:', error);
-        return null;
+    if (cachedClient) {
+        updateClientInCache(clientId, optimisticUpdate);
     }
     
-    // Convert to match old format
-    return {
-        id: data.id,
-        name: data.name,
-        phone: data.phone || '',
-        sex: data.sex || '',
-        createdAt: data.created_at
+    // Sync with Supabase in background (non-blocking) or queue if offline
+    (async () => {
+        // If offline, add to sync queue
+        if (!isOnline()) {
+            addToPendingSyncQueue('update_client', {
+                clientId: clientId,
+                name: name.trim(),
+                phone: phone ? phone.trim() : null,
+                sex: sex || null
+            });
+            return;
+        }
+        
+        const supabase = await getSupabaseAsync();
+        if (!supabase) {
+            // Supabase not available, queue for later
+            addToPendingSyncQueue('update_client', {
+                clientId: clientId,
+                name: name.trim(),
+                phone: phone ? phone.trim() : null,
+                sex: sex || null
+            });
+            return;
+        }
+    
+        try {
+            const { data, error } = await supabase
+                .from('clients')
+                .update({
+                    name: name.trim(),
+                    phone: phone ? phone.trim() : null,
+                    sex: sex || null
+                })
+                .eq('id', clientId)
+                .select()
+                .single();
+    
+            if (error) {
+                throw error;
+            }
+    
+            // Update cache with real data
+            if (data && cachedClient) {
+                updateClientInCache(clientId, {
+                    id: data.id,
+                    name: data.name,
+                    phone: data.phone || '',
+                    sex: data.sex || '',
+                    createdAt: data.created_at
+                });
+            }
+        } catch (err) {
+            console.error('Error updating client in background:', err);
+            // If error, queue for retry
+            addToPendingSyncQueue('update_client', {
+                clientId: clientId,
+                name: name.trim(),
+                phone: phone ? phone.trim() : null,
+                sex: sex || null
+            });
+        }
+    })();
+    
+    // Return optimistic client immediately
+    return cachedClient ? { ...cachedClient, ...optimisticUpdate } : {
+        id: clientId,
+        ...optimisticUpdate,
+        createdAt: cachedClient?.createdAt || new Date().toISOString()
     };
 }
 
-// Delete client and all associated measurements
+// Delete client and all associated measurements - uses user_id, requires internet
 async function deleteClient(clientId) {
-    const supabase = getSupabase();
-    if (!supabase) return;
+    const user = await getCurrentUser();
+    if (!user) {
+        throw new Error('You must be logged in to delete a client.');
+    }
     
-    // Delete measurements first (cascade should handle this, but being explicit)
-    await supabase
-        .from('measurements')
-        .delete()
-        .eq('client_id', clientId);
+    const supabase = await getSupabaseAsync();
+    if (!supabase) {
+        throw new Error('Database connection not available');
+    }
     
-    // Delete client
-    await supabase
-        .from('clients')
-        .delete()
-        .eq('id', clientId);
+    // Check if offline
+    if (!isOnline()) {
+        throw new Error('Internet connection required. Please check your connection and try again.');
+    }
+    
+    try {
+        // Delete measurements first (cascade should handle this, but being explicit)
+        await supabase
+            .from('measurements')
+            .delete()
+            .eq('client_id', clientId)
+            .eq('user_id', user.id); // Ensure user owns these measurements
+    
+        // Delete client
+        const { error } = await supabase
+            .from('clients')
+            .delete()
+            .eq('id', clientId)
+            .eq('user_id', user.id); // Ensure user owns this client
+            
+        if (error) {
+            throw error;
+        }
+        
+        // Remove from cache
+        removeClientFromCache(clientId);
+        if (measurementsCache) {
+            measurementsCache = measurementsCache.filter(m => m.client_id !== clientId);
+            setCachedMeasurements(measurementsCache);
+        }
+        
+        // Update UI
+        if (typeof renderClientsList === 'function') {
+            renderClientsList();
+        }
+        
+        showToast('Client deleted', 'success', 2000);
+    } catch (err) {
+        console.error('Error deleting client:', err);
+        showToast(err.message || 'Failed to delete client. Please try again.', 'error', 4000);
+        // Re-fetch to restore correct state
+        getClients(true).then(() => {
+            renderClientsList();
+        });
+        throw err;
+    }
 }
 
 // Save measurements (legacy function - kept for compatibility but will use individual operations)
@@ -529,20 +1487,24 @@ async function saveMeasurements(legacyMeasurements) {
 
 // Find or create client
 async function findOrCreateClient(name, phone, sex) {
-    const supabase = getSupabase();
-    if (!supabase) return null;
+    const user = await getCurrentUser();
+    if (!user) {
+        throw new Error('You must be logged in to create a client.');
+    }
     
-    const business = await getBusiness();
-    if (!business) return null;
+    const supabase = await getSupabaseAsync();
+    if (!supabase) {
+        throw new Error('Database connection not available');
+    }
     
     const phoneNormalized = phone ? phone.trim() : '';
     const nameNormalized = name.toLowerCase().trim();
     
-    // Try to find existing client by name and phone
+    // Try to find existing client by name and phone (using user_id)
     let query = supabase
         .from('clients')
         .select('*')
-        .eq('business_id', business.id)
+        .eq('user_id', user.id)
         .eq('name', name.trim());
     
     if (phoneNormalized) {
@@ -582,31 +1544,62 @@ async function findOrCreateClient(name, phone, sex) {
         };
     }
     
-    // Create new client - let Supabase generate the ID automatically
-    const { data: newClient, error: insertError } = await supabase
-        .from('clients')
-        .insert([{
-            business_id: business.id,
-            name: name.trim(),
-            phone: phoneNormalized || null,
-            sex: sex || null
-        }])
-        .select()
-        .single();
-    
-    if (insertError) {
-        console.error('Error creating client:', insertError);
-        return null;
+    // Create new client - save directly to Supabase
+    try {
+        const supabase = await getSupabaseAsync();
+        if (!supabase) {
+            throw new Error('Database connection not available');
+        }
+        
+        // Check if offline
+        if (!isOnline()) {
+            throw new Error('Internet connection required. Please check your connection and try again.');
+        }
+        
+        // Get business for this user (required for business_id)
+        const business = await getBusinessForUser(user.id);
+        if (!business) {
+            throw new Error('Please create a business first before adding clients.');
+        }
+        
+        const { data: newClient, error: insertError } = await supabase
+            .from('clients')
+            .insert([{
+                user_id: user.id,
+                business_id: business.id, // Required by database schema
+                name: name.trim(),
+                phone: phoneNormalized || null,
+                sex: sex || null
+            }])
+            .select()
+            .single();
+        
+        if (insertError) {
+            throw insertError;
+        }
+        
+        const client = {
+            id: newClient.id,
+            name: newClient.name,
+            phone: newClient.phone || '',
+            sex: newClient.sex || '',
+            createdAt: newClient.created_at
+        };
+        
+        // Add to cache
+        addClientToCache(client);
+        
+        // Update UI
+        if (typeof renderClientsList === 'function') {
+            renderClientsList();
+        }
+        
+        return client;
+    } catch (err) {
+        console.error('Error creating client:', err);
+        showToast(err.message || 'Failed to create client. Please try again.', 'error', 4000);
+        throw err;
     }
-    
-    // Convert to match old format
-    return {
-        id: newClient.id,
-        name: newClient.name,
-        phone: newClient.phone || '',
-        sex: newClient.sex || '',
-        createdAt: newClient.created_at
-    };
 }
 
 // Update garment type dropdown based on sex
@@ -763,117 +1756,199 @@ async function checkExistingClient() {
     }
 }
 
-// Save measurement (create or update)
+// Save measurement (create or update) - uses user_id, requires internet
 async function saveMeasurement(clientId, formData, measurementId = null) {
-    const supabase = getSupabase();
-    if (!supabase) {
-        console.error('Supabase client not available');
-        return null;
+    const user = await getCurrentUser();
+    if (!user) {
+        throw new Error('You must be logged in to save a measurement.');
     }
     
-    const business = await getBusiness();
-    if (!business) {
-        console.error('Business not found');
-        return null;
+    const supabase = await getSupabaseAsync();
+    if (!supabase) {
+        throw new Error('Database connection not available');
+    }
+    
+    // Check if offline
+    if (!isOnline()) {
+        throw new Error('Internet connection required. Please check your connection and try again.');
     }
     
     if (measurementId) {
-        // Update existing measurement
-        const { data, error } = await supabase
-            .from('measurements')
-            .update({
-                garment_type: formData.garmentType || null,
-                sex: formData.sex || null,
-                shoulder: formData.shoulder || null,
-                chest: formData.chest || null,
-                waist: formData.waist || null,
-                sleeve: formData.sleeve || null,
-                length: formData.length || null,
-                neck: formData.neck || null,
-                hip: formData.hip || null,
-                inseam: formData.inseam || null,
-                thigh: formData.thigh || null,
-                seat: formData.seat || null,
-                notes: formData.notes || null,
-                custom_fields: formData.customFields || {}
-            })
-            .eq('id', measurementId)
-            .select()
-            .single();
+        // Update existing measurement - OPTIMISTIC UPDATE
+        // Get current measurement from cache
+        const cachedMeasurement = measurementsCache?.find(m => m.id === measurementId);
+        const optimisticUpdate = {
+            garment_type: formData.garmentType || null,
+            shoulder: formData.shoulder || null,
+            chest: formData.chest || null,
+            waist: formData.waist || null,
+            sleeve: formData.sleeve || null,
+            length: formData.length || null,
+            neck: formData.neck || null,
+            hip: formData.hip || null,
+            inseam: formData.inseam || null,
+            thigh: formData.thigh || null,
+            seat: formData.seat || null,
+            notes: formData.notes || null,
+            customFields: formData.customFields || {}
+        };
         
-        if (error) {
-            console.error('Error updating measurement:', error);
-            return null;
+        // Update cache immediately
+        if (cachedMeasurement) {
+            updateMeasurementInCache(measurementId, optimisticUpdate);
         }
         
-        // Convert to match old format
-        return {
-            id: data.id,
-            client_id: data.client_id,
-            garment_type: data.garment_type || null,
-            date_created: data.created_at,
-            shoulder: data.shoulder || null,
-            chest: data.chest || null,
-            waist: data.waist || null,
-            sleeve: data.sleeve || null,
-            length: data.length || null,
-            neck: data.neck || null,
-            hip: data.hip || null,
-            inseam: data.inseam || null,
-            thigh: data.thigh || null,
-            seat: data.seat || null,
-            notes: data.notes || null,
-            customFields: data.custom_fields || {}
-        };
+        // Update measurement directly in Supabase
+        try {
+            const { data, error } = await supabase
+                .from('measurements')
+                .update({
+                    garment_type: formData.garmentType || null,
+                    shoulder: formData.shoulder ? parseFloat(formData.shoulder) : null,
+                    chest: formData.chest ? parseFloat(formData.chest) : null,
+                    waist: formData.waist ? parseFloat(formData.waist) : null,
+                    sleeve: formData.sleeve ? parseFloat(formData.sleeve) : null,
+                    length: formData.length ? parseFloat(formData.length) : null,
+                    neck: formData.neck ? parseFloat(formData.neck) : null,
+                    hip: formData.hip ? parseFloat(formData.hip) : null,
+                    inseam: formData.inseam ? parseFloat(formData.inseam) : null,
+                    thigh: formData.thigh ? parseFloat(formData.thigh) : null,
+                    seat: formData.seat ? parseFloat(formData.seat) : null,
+                    notes: formData.notes || null,
+                    custom_fields: formData.customFields || {}
+                })
+                .eq('id', measurementId)
+                .eq('user_id', user.id) // Ensure user owns this measurement
+                .select()
+                .single();
+    
+            if (error) {
+                throw error;
+            }
+    
+            // Update cache with real data from Supabase
+            const measurement = {
+                id: data.id,
+                client_id: data.client_id,
+                garment_type: data.garment_type || null,
+                date_created: data.created_at,
+                shoulder: data.shoulder || null,
+                chest: data.chest || null,
+                waist: data.waist || null,
+                sleeve: data.sleeve || null,
+                length: data.length || null,
+                neck: data.neck || null,
+                hip: data.hip || null,
+                inseam: data.inseam || null,
+                thigh: data.thigh || null,
+                seat: data.seat || null,
+                notes: data.notes || null,
+                customFields: data.custom_fields || {}
+            };
+            
+            updateMeasurementInCache(measurementId, measurement);
+            
+            // Update UI
+            const currentScreen = document.querySelector('.screen.active');
+            if (currentScreen?.id === 'home-screen') {
+                renderRecentMeasurements();
+            }
+            
+            return measurement;
+        } catch (err) {
+            console.error('Error updating measurement:', err);
+            showToast(err.message || 'Failed to update measurement. Please try again.', 'error', 4000);
+            throw err;
+        }
     } else {
-        // Create new measurement - let Supabase generate the ID automatically
-        const { data, error } = await supabase
-            .from('measurements')
-            .insert([{
-                business_id: business.id,
-                client_id: clientId,
-                garment_type: formData.garmentType || null,
-                sex: formData.sex || null,
-                shoulder: formData.shoulder || null,
-                chest: formData.chest || null,
-                waist: formData.waist || null,
-                sleeve: formData.sleeve || null,
-                length: formData.length || null,
-                neck: formData.neck || null,
-                hip: formData.hip || null,
-                inseam: formData.inseam || null,
-                thigh: formData.thigh || null,
-                seat: formData.seat || null,
-                notes: formData.notes || null,
-                custom_fields: formData.customFields || {}
-            }])
-            .select()
-            .single();
-        
-        if (error) {
-            console.error('Error creating measurement:', error);
-            return null;
+        // Create new measurement - save directly to Supabase
+        try {
+            // Get business for this user (required for business_id)
+            const business = await getBusinessForUser(user.id);
+            if (!business) {
+                throw new Error('Please create a business first before adding measurements.');
+            }
+            
+            // Verify client exists and belongs to user
+            const { data: clientCheck, error: clientError } = await supabase
+                .from('clients')
+                .select('id')
+                .eq('id', clientId)
+                .eq('user_id', user.id)
+                .single();
+            
+            if (clientError || !clientCheck) {
+                throw new Error('Client not found. Please select a valid client.');
+            }
+            
+            // Build insert object
+            const insertData = {
+                user_id: user.id,
+                business_id: business.id, // Required by database schema
+                client_id: clientId
+            };
+            
+            // Add optional fields only if they have values
+            if (formData.garmentType) insertData.garment_type = formData.garmentType;
+            if (formData.shoulder) insertData.shoulder = parseFloat(formData.shoulder) || null;
+            if (formData.chest) insertData.chest = parseFloat(formData.chest) || null;
+            if (formData.waist) insertData.waist = parseFloat(formData.waist) || null;
+            if (formData.sleeve) insertData.sleeve = parseFloat(formData.sleeve) || null;
+            if (formData.length) insertData.length = parseFloat(formData.length) || null;
+            if (formData.neck) insertData.neck = parseFloat(formData.neck) || null;
+            if (formData.hip) insertData.hip = parseFloat(formData.hip) || null;
+            if (formData.inseam) insertData.inseam = parseFloat(formData.inseam) || null;
+            if (formData.thigh) insertData.thigh = parseFloat(formData.thigh) || null;
+            if (formData.seat) insertData.seat = parseFloat(formData.seat) || null;
+            if (formData.notes) insertData.notes = formData.notes;
+            if (formData.customFields && Object.keys(formData.customFields).length > 0) {
+                insertData.custom_fields = formData.customFields;
+            }
+            
+            const { data, error } = await supabase
+                .from('measurements')
+                .insert([insertData])
+                .select()
+                .single();
+            
+            if (error) {
+                throw error;
+            }
+            
+            const measurement = {
+                id: data.id,
+                client_id: data.client_id,
+                garment_type: data.garment_type || null,
+                date_created: data.created_at,
+                shoulder: data.shoulder || null,
+                chest: data.chest || null,
+                waist: data.waist || null,
+                sleeve: data.sleeve || null,
+                length: data.length || null,
+                neck: data.neck || null,
+                hip: data.hip || null,
+                inseam: data.inseam || null,
+                thigh: data.thigh || null,
+                seat: data.seat || null,
+                notes: data.notes || null,
+                customFields: data.custom_fields || {}
+            };
+            
+            // Add to cache
+            addMeasurementToCache(measurement);
+            
+            // Update UI
+            const currentScreen = document.querySelector('.screen.active');
+            if (currentScreen?.id === 'home-screen') {
+                renderRecentMeasurements();
+            }
+            
+            return measurement;
+        } catch (err) {
+            console.error('Error creating measurement:', err);
+            showToast(err.message || 'Failed to create measurement. Please try again.', 'error', 4000);
+            throw err;
         }
-        
-        // Convert to match old format
-        return {
-            id: data.id,
-            client_id: data.client_id,
-            garment_type: data.garment_type || null,
-            date_created: data.created_at,
-            shoulder: data.shoulder || null,
-            chest: data.chest || null,
-            waist: data.waist || null,
-            sleeve: data.sleeve || null,
-            length: data.length || null,
-            neck: data.neck || null,
-            hip: data.hip || null,
-            inseam: data.inseam || null,
-            thigh: data.thigh || null,
-            seat: data.seat || null,
-            notes: data.notes || null,
-            customFields: data.custom_fields || {}
-        };
     }
 }
 
@@ -963,15 +2038,26 @@ async function editMeasurement(measurementId, clientId) {
     showScreen('new-measurement-screen');
 }
 
-// Delete measurement
+// Delete measurement (optimistic)
 async function deleteMeasurement(measurementId, clientId) {
     if (!confirm('Are you sure you want to delete this measurement?')) {
         return;
     }
     
+    // Remove from cache immediately (optimistic)
+    removeMeasurementFromCache(measurementId);
+    
+    // Update UI immediately
+    showClientDetails(clientId, previousScreen).catch(err => {
+        console.warn('Error showing client details:', err);
+    });
+    
+    // Delete from Supabase in background (non-blocking)
+    (async () => {
     const supabase = getSupabase();
     if (!supabase) {
         console.error('Supabase client not available');
+            showToast('Unable to connect to database', 'error');
         return;
     }
     
@@ -982,19 +2068,30 @@ async function deleteMeasurement(measurementId, clientId) {
     
     if (error) {
         console.error('Error deleting measurement:', error);
-        alert('Error deleting measurement');
-        return;
-    }
-    
-    // Return to client detail view
-    await showClientDetails(clientId, previousScreen);
+            showToast('Failed to delete measurement. Please try again.', 'error');
+            // Re-fetch to restore correct state
+            getMeasurements(true).then(() => {
+                showClientDetails(clientId, previousScreen);
+            });
+        } else {
+            showToast('Measurement deleted', 'success', 2000);
+        }
+    })();
 }
 
-// Update business header name
+// Update business header name (async - fetches from Supabase)
 async function updateBusinessHeader() {
     const headerElement = document.getElementById('business-header-name');
     if (headerElement) {
         const business = await getBusiness();
+        updateBusinessHeaderSync(business);
+    }
+}
+
+// Update business header name (sync - uses provided business object)
+function updateBusinessHeaderSync(business) {
+    const headerElement = document.getElementById('business-header-name');
+    if (headerElement) {
         if (business && business.name && !isUserLoggedOut()) {
             const businessName = business.name;
             headerElement.textContent = businessName;
@@ -1006,9 +2103,14 @@ async function updateBusinessHeader() {
     }
 }
 
-// Update business name in all navbar instances
+// Update business name in all navbar instances (async - fetches from Supabase)
 async function updateNavbarBusinessName() {
     const business = await getBusiness();
+    updateNavbarBusinessNameSync(business);
+}
+
+// Update business name in all navbar instances (sync - uses provided business object)
+function updateNavbarBusinessNameSync(business) {
     const businessName = (business && business.name && !isUserLoggedOut()) ? business.name : 'Measurement Vault';
     
     document.querySelectorAll('.navbar-business-name').forEach(element => {
@@ -1023,18 +2125,56 @@ async function updateNavbarBusinessName() {
 
 // Screen Navigation
 function showScreen(screenId) {
-    document.querySelectorAll('.screen').forEach(screen => {
-        screen.classList.remove('active');
-    });
-    document.getElementById(screenId).classList.add('active');
-    
-    // Update business header when showing home screen
-    if (screenId === 'home-screen') {
-        updateBusinessHeader();
+    try {
+        // Hide all screens
+        document.querySelectorAll('.screen').forEach(screen => {
+            screen.classList.remove('active');
+            // Remove any inline display styles that might override CSS
+            screen.style.display = '';
+        });
+        
+        // Show the requested screen
+        const targetScreen = document.getElementById(screenId);
+        if (!targetScreen) {
+            console.error(`Screen not found: ${screenId}`);
+            // Fallback to login screen if screen doesn't exist
+            const loginScreen = document.getElementById('login-screen');
+            if (loginScreen) {
+                loginScreen.classList.add('active');
+                loginScreen.style.display = '';
+            } else {
+                console.error('Login screen also not found!');
+            }
+            return;
+        }
+        
+        targetScreen.classList.add('active');
+        // Ensure no inline display style is blocking it
+        targetScreen.style.display = '';
+        
+        // Update business header when showing home screen
+        if (screenId === 'home-screen') {
+            try {
+                updateBusinessHeader();
+            } catch (err) {
+                console.warn('Error updating business header:', err);
+            }
+        }
+        
+        // Update business name in all navbar instances
+        try {
+            updateNavbarBusinessName();
+        } catch (err) {
+            console.warn('Error updating navbar business name:', err);
+        }
+    } catch (err) {
+        console.error('Error in showScreen:', err);
+        // Try to show login screen as fallback
+        const loginScreen = document.getElementById('login-screen');
+        if (loginScreen) {
+            loginScreen.classList.add('active');
+        }
     }
-    
-    // Update business name in all navbar instances
-    updateNavbarBusinessName();
 }
 
 // Navigation Event Listeners
@@ -1139,26 +2279,52 @@ document.getElementById('measurement-form').addEventListener('submit', async (e)
         return;
     }
     
-    // Find or create client
+    // Disable submit button for instant feedback
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+    const originalBtnText = submitBtn?.textContent;
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Saving...';
+    }
+    
+    // Find or create client (optimistic - returns immediately)
     const client = await findOrCreateClient(formData.clientName, formData.phone, formData.sex);
     if (!client) {
-        alert('Error creating/finding client');
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = originalBtnText;
+        }
+        showToast('Error creating/finding client', 'error');
         return;
     }
     
-    // Save measurement (create or update)
-    await saveMeasurement(client.id, formData, currentMeasurementId);
+    // Save measurement (optimistic - returns immediately, syncs in background)
+    const measurement = await saveMeasurement(client.id, formData, currentMeasurementId);
     
-    // Reset form
+    // Reset form immediately
     resetMeasurementForm();
     
-    // Return to appropriate screen
+    // Show success feedback
+    showToast('Measurement saved!', 'success', 2000);
+    
+    // Re-enable button
+    if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalBtnText;
+    }
+    
+    // Return to appropriate screen (non-blocking)
     if (currentClientId && currentClientId === client.id) {
         // We were adding/editing a measurement from client detail view
-        await showClientDetails(client.id, previousScreen);
+        showClientDetails(client.id, previousScreen).catch(err => {
+            console.error('Error showing client details:', err);
+            showScreen('home-screen');
+            renderRecentMeasurements();
+        });
     } else {
         // Normal flow - return to home
         showScreen('home-screen');
+        // Use cache, don't re-fetch
         renderRecentMeasurements();
     }
 });
@@ -1577,13 +2743,20 @@ async function getRecentMeasurements(limit = null, offset = 0) {
     // Apply pagination if limit is specified
     const paginated = limit ? sorted.slice(offset, offset + limit) : sorted.slice(offset);
     
-    // Map to include client info
+    // Map to include client info - handle temp clients gracefully
     return {
         measurements: paginated.map(measurement => {
-            const client = clients.find(c => c.id === measurement.client_id);
+            // Try to find client - check both real and temp IDs
+            let client = clients.find(c => c.id === measurement.client_id);
+            
+            // If not found and client_id is temp, show "Syncing..." instead of "Unknown"
+            const clientName = client 
+                ? client.name 
+                : (isTempId(measurement.client_id) ? 'Syncing...' : 'Unknown client');
+            
             return {
                 ...measurement,
-                clientName: client ? client.name : 'Unknown',
+                clientName: clientName,
                 clientId: measurement.client_id
             };
         }),
@@ -1599,11 +2772,15 @@ let recentMeasurementsExpanded = false;
 
 async function renderRecentMeasurements(resetPagination = true) {
     const container = document.getElementById('recent-measurements');
+    if (!container) return;
+    
     // Reset offset when rendering from scratch (unless explicitly continuing pagination)
     if (resetPagination) {
         recentMeasurementsOffset = 0;
     }
     const limit = recentMeasurementsExpanded ? 15 : recentMeasurementsLimit;
+    
+    // Use cache - don't force refresh (optimistic updates handle cache)
     const result = await getRecentMeasurements(limit, recentMeasurementsOffset);
     
     if (result.measurements.length === 0) {
@@ -1611,22 +2788,36 @@ async function renderRecentMeasurements(resetPagination = true) {
         return;
     }
     
-    let html = result.measurements.map(item => `
-        <div class="recent-item" data-measurement-id="${item.id}" data-client-id="${item.clientId}">
-            <div class="recent-item-field">
-                <div class="recent-item-label">Name</div>
-                <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
+    let html = result.measurements.map(item => {
+        // Check if syncing (for visual feedback, but simplified in new design)
+        const isSyncing = syncingMeasurements.has(item.id);
+        // Determine if measurement is new (created within last 24 hours)
+        const isNew = item.date_created && (new Date() - new Date(item.date_created)) < 24 * 60 * 60 * 1000;
+        const badgeText = isNew ? 'New' : 'Updated';
+        const badgeClass = isNew ? 'badge-new' : 'badge-updated';
+        
+        return `
+        <div class="recent-measurement-row ${isSyncing ? 'syncing' : ''}" data-measurement-id="${item.id}" data-client-id="${item.clientId}">
+            <div class="recent-measurement-icon">
+                <div class="measurement-icon-circle">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                        <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                        <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                    </svg>
+                </div>
             </div>
-            <div class="recent-item-field">
-                <div class="recent-item-label">Garment</div>
-                <div class="recent-item-garment">${item.garment_type || 'No garment type'}</div>
+            <div class="recent-measurement-info">
+                <div class="recent-measurement-client">${escapeHtml(item.clientName || 'Unknown client')}</div>
+                <div class="recent-measurement-garment">${escapeHtml(item.garment_type || 'No garment type')}</div>
+                <div class="recent-measurement-date">${formatDateShort(item.date_created)}</div>
             </div>
-            <div class="recent-item-field">
-                <div class="recent-item-label">Date</div>
-                <div class="recent-item-date">${formatDateShort(item.date_created)}</div>
+            <div class="recent-measurement-badge">
+                <span class="measurement-badge ${badgeClass}">${badgeText}</span>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
     
     container.innerHTML = html;
     
@@ -1634,30 +2825,30 @@ async function renderRecentMeasurements(resetPagination = true) {
     const controlContainer = document.getElementById('recent-measurements-control');
     if (controlContainer) {
         let controlHtml = '';
-        
-        // Add "See More" button if not expanded and there are more measurements
-        if (!recentMeasurementsExpanded && result.hasMore) {
+    
+    // Add "View all →" button if not expanded and there are more measurements
+    if (!recentMeasurementsExpanded && result.hasMore) {
             controlHtml = `
-                <button id="see-more-measurements-btn" class="recent-control-btn">
-                    See more
-                </button>
-            `;
-        }
-        
-        // Add "Collapse" button if expanded
-        if (recentMeasurementsExpanded) {
+                <button id="see-more-measurements-btn" class="recent-view-all-btn">
+                    View all →
+            </button>
+        `;
+    }
+    
+    // Add "Collapse" button if expanded
+    if (recentMeasurementsExpanded) {
             controlHtml = `
-                <button id="collapse-measurements-btn" class="recent-control-btn">
-                    Collapse
-                </button>
-            `;
-        }
-        
+                <button id="collapse-measurements-btn" class="recent-view-all-btn">
+                Collapse
+            </button>
+        `;
+    }
+    
         controlContainer.innerHTML = controlHtml;
     }
     
     // Add click listeners for measurement items - open Measurement Detail View
-    container.querySelectorAll('.recent-item').forEach(item => {
+    container.querySelectorAll('.recent-measurement-row').forEach(item => {
         item.addEventListener('click', async () => {
             const measurementId = item.getAttribute('data-measurement-id');
             await showMeasurementDetail(measurementId);
@@ -1693,22 +2884,33 @@ async function renderRecentMeasurements(resetPagination = true) {
             const nextResult = await getRecentMeasurements(15, recentMeasurementsOffset);
             if (nextResult.measurements.length > 0) {
                 const existingItems = container.querySelectorAll('.recent-item');
-                const nextItems = nextResult.measurements.map(item => `
-                    <div class="recent-item" data-measurement-id="${item.id}" data-client-id="${item.clientId}">
-                        <div class="recent-item-field">
-                            <div class="recent-item-label">Name</div>
-                            <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
+                const nextItems = nextResult.measurements.map(item => {
+                    const isNew = !item.date_created || (new Date() - new Date(item.date_created)) < 24 * 60 * 60 * 1000;
+                    const badgeText = isNew ? 'New' : 'Updated';
+                    const badgeClass = isNew ? 'badge-new' : 'badge-updated';
+                    
+                    return `
+                    <div class="recent-measurement-row" data-measurement-id="${item.id}" data-client-id="${item.clientId}">
+                        <div class="recent-measurement-icon">
+                            <div class="measurement-icon-circle">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                                </svg>
+                            </div>
                         </div>
-                        <div class="recent-item-field">
-                            <div class="recent-item-label">Garment</div>
-                            <div class="recent-item-garment">${item.garment_type || 'No garment type'}</div>
+                        <div class="recent-measurement-info">
+                            <div class="recent-measurement-client">${escapeHtml(item.clientName || 'Unknown client')}</div>
+                            <div class="recent-measurement-garment">${escapeHtml(item.garment_type || 'No garment type')}</div>
+                            <div class="recent-measurement-date">${formatDateShort(item.date_created)}</div>
                         </div>
-                        <div class="recent-item-field">
-                            <div class="recent-item-label">Date</div>
-                            <div class="recent-item-date">${formatDateShort(item.date_created)}</div>
+                        <div class="recent-measurement-badge">
+                            <span class="measurement-badge ${badgeClass}">${badgeText}</span>
                         </div>
                     </div>
-                `).join('');
+                `;
+                }).join('');
                 
                 // Remove the Next button temporarily
                 nextBtn.remove();
@@ -1727,7 +2929,7 @@ async function renderRecentMeasurements(resetPagination = true) {
                 }
                 
                 // Add click listeners to new items - open Measurement Detail View
-                container.querySelectorAll('.recent-item').forEach(item => {
+                container.querySelectorAll('.recent-measurement-row').forEach(item => {
                     if (!item.hasAttribute('data-listener-added')) {
                         item.setAttribute('data-listener-added', 'true');
                         item.addEventListener('click', async () => {
@@ -1763,6 +2965,9 @@ function formatDateShort(dateString) {
 async function renderClientsList() {
     const container = document.getElementById('clients-list');
     const countElement = document.getElementById('clients-count');
+    if (!container) return;
+    
+    // Use cache - don't force refresh (optimistic updates handle cache)
     const clients = await getClients();
     const measurements = await getMeasurements();
     
@@ -1788,67 +2993,54 @@ async function renderClientsList() {
         a.name.toLowerCase().localeCompare(b.name.toLowerCase())
     );
     
-    container.innerHTML = sortedClients.map(client => {
+    container.innerHTML = sortedClients.map((client, index) => {
         const clientMeasurements = measurements.filter(m => m.client_id === client.id);
+        const measurementCount = clientMeasurements.length;
+        const secondaryText = measurementCount > 0 
+            ? `${measurementCount} measurement${measurementCount !== 1 ? 's' : ''}`
+            : (client.phone || 'No measurements');
+        
+        // Get initials from client name
+        const getInitials = (name) => {
+            const parts = name.trim().split(/\s+/);
+            if (parts.length >= 2) {
+                return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+            }
+            return name.substring(0, 2).toUpperCase();
+        };
+        const initials = getInitials(client.name);
+        
         return `
-            <div class="client-list-item" data-client-id="${client.id}">
-                <div class="client-list-item-content">
-                    <div class="client-list-name">${escapeHtml(client.name)}</div>
+            <div class="client-leaderboard-card" data-client-id="${client.id}">
+                <div class="client-card-index">
+                    <span class="client-index-badge">${index + 1}</span>
                 </div>
-                <div class="client-menu-wrapper">
-                    <button class="btn-menu client-list-menu-btn" data-client-id="${client.id}" aria-label="Client actions">⋮</button>
-                    <div class="menu-dropdown client-list-dropdown" data-client-id="${client.id}">
-                        <button class="menu-item edit-client-list-btn" data-client-id="${client.id}">Edit Client</button>
-                        <button class="menu-item menu-item-danger delete-client-list-btn" data-client-id="${client.id}">Delete Client</button>
+                <div class="client-card-main">
+                    <div class="client-avatar">
+                        <span class="client-avatar-initials">${initials}</span>
+                    </div>
+                    <div class="client-card-info">
+                        <div class="client-card-name">${escapeHtml(client.name)}</div>
+                        <div class="client-card-secondary">${escapeHtml(secondaryText)}</div>
+                    </div>
+                </div>
+                <div class="client-card-right">
+                    <div class="client-card-badge">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9 18l6-6-6-6"></path>
+                        </svg>
                     </div>
                 </div>
             </div>
         `;
     }).join('');
     
-    // Add click listeners for client content (to view details)
-    container.querySelectorAll('.client-list-item-content').forEach(content => {
-        content.addEventListener('click', async () => {
-            const clientId = content.closest('.client-list-item').getAttribute('data-client-id');
+    // Add click listeners for client cards (to view details)
+    container.querySelectorAll('.client-leaderboard-card').forEach(card => {
+        // Make the entire card clickable
+        card.addEventListener('click', async () => {
+            const clientId = card.getAttribute('data-client-id');
             await showClientDetails(clientId, 'clients-screen');
-        });
-    });
-    
-    // Add click listeners for menu buttons
-    container.querySelectorAll('.client-list-menu-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const clientId = btn.getAttribute('data-client-id');
-            const dropdown = container.querySelector(`.client-list-dropdown[data-client-id="${clientId}"]`);
-            
-            // Close all other dropdowns first
-            closeAllMenuDropdowns();
-            
-            // Toggle this dropdown with proper positioning
-            if (!dropdown.classList.contains('active')) {
-                positionDropdown(btn, dropdown);
-                dropdown.classList.add('active');
-            }
-        });
-    });
-    
-    // Add click listeners for Edit Client in list
-    container.querySelectorAll('.edit-client-list-btn').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const clientId = btn.getAttribute('data-client-id');
-            closeAllMenuDropdowns();
-            await editClientFromList(clientId);
-        });
-    });
-    
-    // Add click listeners for Delete Client in list
-    container.querySelectorAll('.delete-client-list-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const clientId = btn.getAttribute('data-client-id');
-            closeAllMenuDropdowns();
-            deleteClientFromList(clientId);
         });
     });
 }
@@ -1885,10 +3077,11 @@ async function deleteClientFromList(clientId) {
         return;
     }
     
+    // Delete client (optimistic - updates cache immediately)
     deleteClient(clientId);
     
-    // Refresh the clients list
-    await renderClientsList();
+    // Refresh the clients list immediately (uses cache, instant)
+    renderClientsList();
 }
 
 // Show Measurement Detail View
@@ -2232,65 +3425,171 @@ document.getElementById('back-from-edit-client-btn').addEventListener('click', a
 });
 
 // Business Setup Form Submission
-document.getElementById('business-setup-form').addEventListener('submit', async (e) => {
+function setupBusinessFormListener() {
+    const businessSetupForm = document.getElementById('business-setup-form');
+    if (!businessSetupForm) {
+        // Form not ready yet, retry after DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', setupBusinessFormListener);
+        } else {
+            // DOM is ready but form doesn't exist - this shouldn't happen, but retry anyway
+            setTimeout(setupBusinessFormListener, 100);
+        }
+        return;
+    }
+    
+    // Remove existing listener if any (to prevent duplicates)
+    const newForm = businessSetupForm.cloneNode(true);
+    businessSetupForm.parentNode.replaceChild(newForm, businessSetupForm);
+    
+    // Add event listener to the new form
+    newForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     
+        // Disable button to prevent double submission
+        const submitBtn = newForm.querySelector('button[type="submit"]');
+        const originalBtnText = submitBtn?.textContent;
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Creating...';
+        }
+        
+        try {
     const name = document.getElementById('business-name').value.trim();
     const email = document.getElementById('business-email').value.trim();
     const phone = document.getElementById('business-phone').value.trim();
     
     if (!name) {
         alert('Business name is required');
-        return;
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalBtnText;
     }
-    
-    if (!email) {
-        alert('Business email is required');
         return;
     }
     
     if (!phone) {
         alert('Business phone is required');
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalBtnText;
+                }
         return;
     }
     
-    // Clear any existing business session before starting registration
-    // This ensures old businesses don't override new registrations
-    localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
-    localStorage.removeItem(LOGOUT_STATE_KEY);
-    
-    // First, check if a business with these credentials already exists
-    const existingBusiness = await findBusinessByCredentials(name, email, phone);
-    
-    if (existingBusiness) {
-        // Business exists - ID is already stored in findBusinessByCredentials
-        // Log them in
-        loginBusiness();
-        
-        // Update header and show home screen
-        await updateBusinessHeader();
-        await updateNavbarBusinessName();
-        showScreen('home-screen');
-        await renderRecentMeasurements();
-    } else {
-        // Business doesn't exist - create new business
-        // Business ID will be stored in createBusiness function
-        const business = await createBusiness(name, email, phone);
-        if (!business) {
-            alert('Error creating business. Please check the browser console (F12) for details.');
-            return;
+            // Email is optional - no validation needed
+            
+            // Clear any existing business session before starting registration
+            // This ensures old businesses don't override new registrations
+            localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
+            localStorage.removeItem(LOGOUT_STATE_KEY);
+            
+            // Wait for Supabase to be ready
+            console.log('Waiting for Supabase...');
+            const supabase = await getSupabaseAsync();
+            if (!supabase) {
+                throw new Error('Unable to connect to database. Please check your internet connection and refresh the page.');
+            }
+            console.log('Supabase ready');
+            
+            // Get current user - must be authenticated
+            const user = await getCurrentUser();
+            if (!user) {
+                throw new Error('You must be logged in to create a business. Please log in first.');
+            }
+            
+            // Check if business already exists for this user
+            const existingBusiness = await getBusinessForUser(user.id);
+            
+            if (existingBusiness) {
+                console.log('Business already exists for this user');
+                // Business exists - show dashboard
+                updateBusinessHeaderSync(existingBusiness);
+                updateNavbarBusinessNameSync(existingBusiness);
+                showScreen('home-screen');
+                await loadUserData(user.id);
+                
+                // Re-enable button
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalBtnText;
+                }
+            } else {
+                console.log('Creating new business...');
+                
+                // Get current user
+                const user = await getCurrentUser();
+                if (!user) {
+                    throw new Error('You must be logged in to create a business. Please log in first.');
+                }
+                
+                // Create business for this user
+                const supabase = await getSupabaseAsync();
+                if (!supabase) {
+                    throw new Error('Database connection not available');
+                }
+                
+                // Check if business already exists for this user
+                const existing = await getBusinessForUser(user.id);
+                if (existing) {
+                    throw new Error('You already have a business. Only one business per account is allowed.');
+                }
+                
+                const { data, error } = await supabase
+                    .from('businesses')
+                    .insert([{
+                        user_id: user.id,
+                        name: name.trim(),
+                        email: email ? email.trim().toLowerCase() : null,
+                        phone: phone.trim()
+                    }])
+                    .select()
+                    .single();
+                
+                if (error) {
+                    throw error;
+                }
+                
+                const business = {
+                    id: data.id,
+                    name: data.name,
+                    email: data.email || null,
+                    phone: data.phone,
+                    createdAt: data.created_at
+                };
+                
+                console.log('Business created successfully');
+                
+                // Update header and show home screen
+                updateBusinessHeaderSync(business);
+                updateNavbarBusinessNameSync(business);
+                showScreen('home-screen');
+                await loadUserData(user.id);
+                
+                // Re-enable button
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalBtnText;
+                }
+            }
+        } catch (err) {
+            console.error('Error in business setup form submission:', err);
+            const errorMessage = err.message || 'An error occurred. Please check the browser console (F12) for details.';
+            alert(errorMessage);
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalBtnText;
+            }
         }
-        
-        // Log the user in after creating business (clears logout state)
-        loginBusiness();
-        
-        // Update header and show home screen
-        await updateBusinessHeader();
-        await updateNavbarBusinessName();
-        showScreen('home-screen');
-        await renderRecentMeasurements();
-    }
-});
+    });
+}
+
+// Setup business form listener when DOM is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupBusinessFormListener);
+} else {
+    setupBusinessFormListener();
+}
 
 // Settings button click
 // Settings button handler - works with both ID and class
@@ -2307,7 +3606,7 @@ async function handleSettingsClick() {
             </div>
             <div class="business-info-item">
                 <span class="business-info-label">Email:</span>
-                <span>${escapeHtml(business.email)}</span>
+                <span>${escapeHtml(business.email || 'Not set')}</span>
             </div>
             <div class="business-info-item">
                 <span class="business-info-label">Phone:</span>
@@ -2315,6 +3614,12 @@ async function handleSettingsClick() {
             </div>
         `;
     }
+    
+    // Render email linking status
+    await renderEmailLinkingStatus();
+    
+    // Set up event listeners when settings screen is shown (in case they weren't set up yet)
+    setupEmailLinkingListeners();
     
     showScreen('settings-screen');
 }
@@ -2368,15 +3673,12 @@ document.getElementById('edit-business-form').addEventListener('submit', async (
         return;
     }
     
-    if (!email) {
-        alert('Business email is required');
-        return;
-    }
-    
     if (!phone) {
         alert('Business phone is required');
         return;
     }
+    
+    // Email is optional - no validation needed
     
     await updateBusiness(name, email, phone);
     
@@ -2403,6 +3705,125 @@ document.getElementById('edit-business-form').addEventListener('submit', async (
     showScreen('settings-screen');
 });
 
+// Email Linking Event Listeners - Use event delegation for dynamic buttons
+function setupEmailLinkingListeners() {
+    // Remove existing listeners to prevent duplicates
+    const existingListeners = document.querySelectorAll('[data-email-linking-listener]');
+    existingListeners.forEach(el => el.removeAttribute('data-email-linking-listener'));
+    
+    // Send verification email button
+    const sendVerificationBtn = document.getElementById('send-verification-btn');
+    if (sendVerificationBtn && !sendVerificationBtn.hasAttribute('data-email-linking-listener')) {
+        sendVerificationBtn.setAttribute('data-email-linking-listener', 'true');
+        sendVerificationBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const emailInput = document.getElementById('link-email-input');
+            if (!emailInput) {
+                console.error('Email input not found');
+                return;
+            }
+            
+            const email = emailInput.value.trim();
+            if (!email) {
+                alert('Please enter an email address.');
+                return;
+            }
+            
+            sendVerificationBtn.disabled = true;
+            sendVerificationBtn.textContent = 'Sending...';
+            
+            try {
+                const success = await requestEmailVerification(email);
+                
+                if (success) {
+                    // Refresh email linking status
+                    await renderEmailLinkingStatus();
+                    
+                    alert('Verification email sent! Please check your inbox and click the magic link to verify your email.');
+                } else {
+                    sendVerificationBtn.disabled = false;
+                    sendVerificationBtn.textContent = 'Send Verification Link';
+                }
+            } catch (err) {
+                console.error('Error in send verification:', err);
+                sendVerificationBtn.disabled = false;
+                sendVerificationBtn.textContent = 'Send Verification Link';
+                alert('An error occurred. Please check the console for details.');
+            }
+        });
+    }
+    
+    // Resend verification email button
+    const resendVerificationBtn = document.getElementById('resend-verification-btn');
+    if (resendVerificationBtn && !resendVerificationBtn.hasAttribute('data-email-linking-listener')) {
+        resendVerificationBtn.setAttribute('data-email-linking-listener', 'true');
+        resendVerificationBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const business = await getBusiness();
+            if (!business || !business.email) {
+                alert('No email address found.');
+                return;
+            }
+            
+            resendVerificationBtn.disabled = true;
+            resendVerificationBtn.textContent = 'Resending...';
+            
+            try {
+                const success = await requestEmailVerification(business.email);
+                
+                if (success) {
+                    await renderEmailLinkingStatus();
+                    alert('Verification email resent! Please check your inbox and click the magic link to verify your email.');
+                } else {
+                    resendVerificationBtn.disabled = false;
+                    resendVerificationBtn.textContent = 'Resend Email';
+                }
+            } catch (err) {
+                console.error('Error in resend verification:', err);
+                resendVerificationBtn.disabled = false;
+                resendVerificationBtn.textContent = 'Resend Email';
+                alert('An error occurred. Please check the console for details.');
+            }
+        });
+    }
+    
+    // Cancel verification button
+    const cancelVerificationBtn = document.getElementById('cancel-verification-btn');
+    if (cancelVerificationBtn && !cancelVerificationBtn.hasAttribute('data-email-linking-listener')) {
+        cancelVerificationBtn.setAttribute('data-email-linking-listener', 'true');
+        cancelVerificationBtn.addEventListener('click', async (e) => {
+            e.preventDefault();
+            const supabase = getSupabase();
+            if (!supabase) return;
+            
+            const business = await getBusiness();
+            if (!business) return;
+            
+            try {
+                // Clear email (verification cancelled)
+                await supabase
+                    .from('businesses')
+                    .update({
+                        email: null,
+                        email_verified: false
+                    })
+                    .eq('id', business.id);
+                
+                // Sign out from Supabase Auth if signed in (cleanup)
+                await supabase.auth.signOut();
+                
+                await renderEmailLinkingStatus();
+            } catch (err) {
+                console.error('Error cancelling verification:', err);
+                alert('An error occurred. Please try again.');
+            }
+        });
+    }
+}
+
+// Set up listeners on DOMContentLoaded and also when settings screen is shown
+document.addEventListener('DOMContentLoaded', setupEmailLinkingListeners);
+
 // Logout button click (no data deletion)
 document.getElementById('logout-btn').addEventListener('click', () => {
     if (!confirm('Are you sure you want to logout? Your data will be preserved.')) {
@@ -2424,13 +3845,14 @@ document.getElementById('business-login-form').addEventListener('submit', async 
     const email = document.getElementById('login-business-email').value.trim();
     const phone = document.getElementById('login-business-phone').value.trim();
     
-    if (!name || !email || !phone) {
-        alert('Please enter all business details');
+    if (!name || !phone) {
+        alert('Business name and phone are required');
         return;
     }
     
+    // Email is optional - pass empty string if not provided
     // Check if credentials match
-    if (await matchBusiness(name, email, phone)) {
+    if (await matchBusiness(name, email || '', phone)) {
         loginBusiness();
         await updateBusinessHeader();
         showScreen('home-screen');
@@ -2532,6 +3954,44 @@ function showAddFieldModal() {
     });
 }
 
+// Update all pending measurements that reference a temp client_id with the real client_id
+function updatePendingMeasurementsClientId(tempClientId, realClientId) {
+    if (!tempClientId || !realClientId || !isTempId(tempClientId)) {
+        return;
+    }
+    
+    // Update measurements in cache
+    const measurements = getCachedMeasurements();
+    measurements.forEach(measurement => {
+        if (measurement.client_id === tempClientId) {
+            updateMeasurementInCache(measurement.id, {
+                ...measurement,
+                client_id: realClientId
+            });
+        }
+    });
+    
+    // Update pending sync queue items
+    const queue = getPendingSyncQueue();
+    let queueUpdated = false;
+    queue.forEach(item => {
+        if (item.action === 'create_measurement' && item.data.client_id === tempClientId) {
+            item.data.client_id = realClientId;
+            if (item.data.tempClientId === tempClientId) {
+                delete item.data.tempClientId; // Remove temp reference
+            }
+            queueUpdated = true;
+        } else if (item.action === 'update_measurement' && item.data.client_id === tempClientId) {
+            item.data.client_id = realClientId;
+            queueUpdated = true;
+        }
+    });
+    
+    if (queueUpdated) {
+        localStorage.setItem(PENDING_SYNC_QUEUE_KEY, safeJsonStringify(queue));
+    }
+}
+
 // Close the Add Field Modal
 function closeAddFieldModal() {
     const modal = document.getElementById('add-field-modal');
@@ -2591,8 +4051,163 @@ function addCustomFieldRow(fieldName = '', fieldValue = '') {
     }
 }
 
-// Initialize app
+// Handle magic link verification on app load
+async function handleMagicLinkVerification() {
+    const supabase = await getSupabaseAsync();
+    if (!supabase) {
+        return false;
+    }
+    
+    // Check if URL contains auth tokens (magic link redirect)
+    const hash = window.location.hash;
+    const hasAuthTokens = hash.includes('access_token') || hash.includes('type=recovery') || hash.includes('type=magiclink');
+    
+    if (!hasAuthTokens) {
+        // No auth tokens in URL, check for existing session
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user?.email) {
+            // Session exists, verify email is linked to business
+            await processEmailVerification(session.user.email);
+        }
+        return false;
+    }
+    
+    // URL contains auth tokens - process the magic link callback
+    try {
+        // Supabase automatically processes hash fragments when getSession() is called
+        // This will extract tokens from URL hash and establish the session
+        const { data: { session }, error } = await supabase.auth.getSession();
+        
+        if (error) {
+            console.error('Error processing magic link session:', error);
+            // Clear hash even on error
+            if (hasAuthTokens) {
+                window.history.replaceState(null, '', window.location.pathname + window.location.search);
+            }
+            return false;
+        }
+        
+        if (!session?.user?.email) {
+            console.warn('No session or email after processing magic link');
+            // Clear hash if no session
+            if (hasAuthTokens) {
+                window.history.replaceState(null, '', window.location.pathname + window.location.search);
+            }
+            return false;
+        }
+        
+        // Wait a moment for Supabase to fully process the email verification
+        // Sometimes email_confirmed_at is set asynchronously
+        let user = session.user;
+        let attempts = 0;
+        while (attempts < 5 && (!user.email_confirmed_at)) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+            const { data: { user: refreshedUser } } = await supabase.auth.getUser();
+            if (refreshedUser) {
+                user = refreshedUser;
+            }
+            attempts++;
+        }
+        
+        // Session established successfully - link email to business
+        // Use the refreshed user data to get accurate verification status
+        const linked = await processEmailVerification(user.email);
+        
+        // Clear the hash from URL after processing (if it had tokens)
+        if (hasAuthTokens) {
+            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+        
+        return linked;
+    } catch (err) {
+        console.error('Exception handling magic link:', err);
+        // Clear hash even on error
+        if (hasAuthTokens) {
+            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+        return false;
+    }
+}
+
+// Process email verification and link to business
+async function processEmailVerification(email) {
+    const business = await getBusiness();
+    if (!business) {
+        console.warn('No business found to link email to');
+        return false;
+    }
+    
+    // Link the verified email to the current device-based business
+    // This checks Supabase Auth user's email_confirmed_at for real verification status
+    const linked = await linkEmailToBusiness(email);
+    
+    if (linked) {
+        // Refresh UI (but don't block on it)
+        renderEmailLinkingStatus().catch(err => console.warn('Error refreshing email status:', err));
+        updateBusinessHeader().catch(err => console.warn('Error updating header:', err));
+        
+        // Only show alert if we're on the settings screen or just verified
+        const currentScreen = document.querySelector('.screen.active');
+        const hasAuthTokens = window.location.hash.includes('access_token');
+        if (currentScreen?.id === 'settings-screen' || hasAuthTokens) {
+            // Small delay to ensure screen is rendered
+            setTimeout(() => {
+                alert('Email verified successfully! Your account is now linked to this email.');
+            }, 100);
+        }
+        
+        return true;
+    } else {
+        // Email not verified yet - might need to wait for Supabase to process
+        console.warn('Email linking returned false - verification may still be processing');
+        return false;
+    }
+}
+
+// Initialize Supabase Auth state listener
+async function initializeAuthListener() {
+    const supabase = await getSupabaseAsync();
+    if (!supabase) {
+        console.warn('Supabase not ready for auth listener, will retry later');
+        // Retry after a short delay
+        setTimeout(() => initializeAuthListener(), 1000);
+        return;
+    }
+    
+    // Listen for auth state changes (when user clicks magic link)
+    supabase.auth.onAuthStateChange(async (event, session) => {
+        // Handle SIGNED_IN event for email linking
+        if (event === 'SIGNED_IN' && session?.user?.email) {
+            // Check if we have a current business to link to
+            const business = await getBusiness();
+            if (business && !business.email_verified) {
+                // User clicked magic link and has a device-based business
+                // Link the verified email to the current device-based business
+                await processEmailVerification(session.user.email);
+            }
+        }
+    });
+}
+
+// ========== STANDARD AUTHENTICATION INITIALIZATION ==========
 function initializeApp() {
+    console.log('Initializing app...');
+    
+    // Ensure at least one screen is visible (default to login)
+    const allScreens = document.querySelectorAll('.screen');
+    if (allScreens.length > 0) {
+        // Check if any screen is already active
+        const hasActiveScreen = Array.from(allScreens).some(screen => screen.classList.contains('active'));
+        if (!hasActiveScreen) {
+            // No active screen - show login screen by default
+            const loginScreen = document.getElementById('login-screen');
+            if (loginScreen) {
+                loginScreen.classList.add('active');
+                console.log('No active screen found, showing login screen by default');
+            }
+        }
+    }
+    
     // Hide all measurement fields on page load
     const allFields = ['shoulder', 'chest', 'waist', 'sleeve', 'length', 'neck', 'hip', 'inseam', 'thigh', 'seat'];
     allFields.forEach(field => {
@@ -2605,38 +4220,993 @@ function initializeApp() {
         }
     });
     
-    // Wait for Supabase to be initialized, then initialize storage
+    // Setup authentication form handlers
+    setupAuthForms();
+    
+    // Show login screen immediately (before checking auth) to prevent blank screen
+    showScreen('login-screen');
+    
+    // Show loading screen
+    showLoadingScreen();
+    
+    // Wait for Supabase to be initialized, then check auth
     (async function() {
-        // Wait for Supabase client to be ready (max 5 seconds)
-        let attempts = 0;
-        while (!window.supabaseClient && attempts < 50) {
-            await new Promise(resolve => setTimeout(resolve, 100));
-            attempts++;
-        }
-        
-        if (!window.supabaseClient) {
-            console.error('Supabase client failed to initialize after 5 seconds');
-            alert('Error: Unable to connect to Supabase. Please check your internet connection and environment variables.');
-            return;
-        }
-        
-        // Initialize storage and show appropriate screen
-        const appInitialized = await initStorage();
-        if (appInitialized) {
-            await updateBusinessHeader();
-            await updateNavbarBusinessName();
-            showScreen('home-screen');
-            await renderRecentMeasurements();
+        try {
+            console.log('Waiting for Supabase...');
+            // Wait for Supabase client to be ready
+            const supabase = await getSupabaseAsync();
             
-            // Reset measurement form if business exists
-            resetMeasurementForm();
+            if (!supabase) {
+                console.error('Supabase client failed to initialize');
+                hideLoadingScreen();
+                showToast('Unable to connect to database. Please check your connection.', 'error', 5000);
+                showScreen('login-screen');
+                return;
+            }
+            
+            console.log('Supabase ready, checking auth...');
+            // Check authentication status
+            const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+            
+            if (sessionError || !session || !session.user) {
+                console.log('Not authenticated, showing login screen');
+                // Not authenticated - show login screen
+                hideLoadingScreen();
+                showScreen('login-screen');
+                return;
+            }
+            
+            console.log('User authenticated:', session.user.email);
+            // User is authenticated - check if business exists
+            const userId = session.user.id;
+            
+            try {
+                const business = await getBusinessForUser(userId);
+                
+                if (!business) {
+                    console.log('No business found, showing business setup');
+                    // No business - show business setup
+                    hideLoadingScreen();
+                    showScreen('business-setup-screen');
+                } else {
+                    console.log('Business found, showing dashboard');
+                    // Business exists - show dashboard
+                    hideLoadingScreen();
+                    showScreen('home-screen');
+                    
+                    // Load and display data (non-blocking)
+                    loadUserData(userId).catch(err => {
+                        console.error('Error loading user data:', err);
+                        // Still show dashboard even if data load fails
+                    });
+                }
+            } catch (businessError) {
+                // Error fetching business - show business setup as fallback
+                console.error('Error fetching business:', businessError);
+                hideLoadingScreen();
+                showScreen('business-setup-screen');
+            }
+        } catch (err) {
+            console.error('Error during app initialization:', err);
+            hideLoadingScreen();
+            // Always show a screen - never leave blank
+            showScreen('login-screen');
+        } finally {
+            // Setup all form listeners after screens are shown
+            console.log('Setting up form listeners...');
+            setupBusinessFormListener();
+            // Other form listeners are set up inline where needed
         }
     })();
 }
 
+// Setup authentication form handlers
+function setupAuthForms() {
+    // Sign up form
+    const signupForm = document.getElementById('signup-form');
+    if (signupForm) {
+        signupForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('signup-email').value.trim();
+            const password = document.getElementById('signup-password').value;
+            const confirmPassword = document.getElementById('signup-confirm-password').value;
+            
+            const errorDiv = document.getElementById('signup-error');
+            const successDiv = document.getElementById('signup-success');
+            
+            // Clear previous messages
+            if (errorDiv) errorDiv.style.display = 'none';
+            if (successDiv) successDiv.style.display = 'none';
+            
+            // Validate
+            if (password !== confirmPassword) {
+                if (errorDiv) {
+                    errorDiv.textContent = 'Passwords do not match';
+                    errorDiv.style.display = 'block';
+                }
+                return;
+            }
+            
+            if (password.length < 6) {
+                if (errorDiv) {
+                    errorDiv.textContent = 'Password must be at least 6 characters';
+                    errorDiv.style.display = 'block';
+                }
+                return;
+            }
+            
+            try {
+                const supabase = await getSupabaseAsync();
+                if (!supabase) throw new Error('Database not available');
+                
+                const { data, error } = await supabase.auth.signUp({
+                    email: email.toLowerCase(),
+                    password: password,
+                    options: {
+                        emailRedirectTo: `${window.location.origin}${window.location.pathname}`
+                    }
+                });
+                
+                if (error) throw error;
+                
+                // Check if email confirmation is required
+                if (data.user && !data.user.email_confirmed_at) {
+                    // Email confirmation required
+                    if (successDiv) {
+                        successDiv.innerHTML = `
+                            <div style="margin-bottom: 12px;">
+                                <strong>Account created!</strong> Check your email (and spam folder) for the verification link.
+                            </div>
+                            <button id="resend-verification-btn" type="button" class="btn btn-secondary" style="width: 100%; margin-top: 8px;">
+                                Resend Verification Email
+                            </button>
+                        `;
+                        successDiv.style.display = 'block';
+                        
+                        // Add resend button handler
+                        const resendBtn = document.getElementById('resend-verification-btn');
+                        if (resendBtn) {
+                            resendBtn.addEventListener('click', async () => {
+                                resendBtn.disabled = true;
+                                resendBtn.textContent = 'Sending...';
+                                try {
+                                    const { error: resendError } = await supabase.auth.resend({
+                                        type: 'signup',
+                                        email: email.toLowerCase()
+                                    });
+                                    if (resendError) throw resendError;
+                                    resendBtn.textContent = 'Email Sent!';
+                                    setTimeout(() => {
+                                        resendBtn.disabled = false;
+                                        resendBtn.textContent = 'Resend Verification Email';
+                                    }, 3000);
+                                } catch (resendErr) {
+                                    console.error('Resend error:', resendErr);
+                                    resendBtn.textContent = 'Failed. Try again.';
+                                    resendBtn.disabled = false;
+                                }
+                            });
+                        }
+                    }
+                } else {
+                    // Email might be auto-confirmed (if Supabase settings allow)
+                    if (successDiv) {
+                        successDiv.textContent = 'Account created successfully! Redirecting...';
+                        successDiv.style.display = 'block';
+                    }
+                    // Reload to check auth state
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1500);
+                }
+                
+                // Disable form
+                signupForm.querySelector('button[type="submit"]').disabled = true;
+            } catch (err) {
+                console.error('Sign up error:', err);
+                if (errorDiv) {
+                    let errorMessage = err.message || 'Failed to create account. Please try again.';
+                    
+                    // Provide helpful error messages
+                    if (err.message && err.message.includes('already registered')) {
+                        errorMessage = 'This email is already registered. Try logging in instead.';
+                    } else if (err.message && err.message.includes('email')) {
+                        errorMessage = 'Invalid email address. Please check and try again.';
+                    }
+                    
+                    errorDiv.textContent = errorMessage;
+                    errorDiv.style.display = 'block';
+                }
+            }
+        });
+    }
+    
+    // Login form
+    const loginForm = document.getElementById('login-form');
+    if (loginForm) {
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('login-email').value.trim();
+            const password = document.getElementById('login-password').value;
+            
+            const errorDiv = document.getElementById('login-error');
+            if (errorDiv) errorDiv.style.display = 'none';
+            
+            try {
+                const supabase = await getSupabaseAsync();
+                if (!supabase) throw new Error('Database not available');
+                
+                const { data, error } = await supabase.auth.signInWithPassword({
+                    email: email.toLowerCase(),
+                    password: password
+                });
+                
+                if (error) throw error;
+                
+                // Check if user email is verified
+                if (data.user && !data.user.email_confirmed_at) {
+                    if (errorDiv) {
+                        errorDiv.innerHTML = `
+                            <div style="margin-bottom: 12px;">
+                                Please verify your email before logging in. Check your inbox and spam folder.
+                            </div>
+                            <button id="resend-login-verification-btn" type="button" class="btn btn-secondary" style="width: 100%; margin-top: 8px;">
+                                Resend Verification Email
+                            </button>
+                        `;
+                        errorDiv.style.display = 'block';
+                        
+                        // Add resend button handler
+                        const resendBtn = document.getElementById('resend-login-verification-btn');
+                        if (resendBtn) {
+                            resendBtn.addEventListener('click', async () => {
+                                resendBtn.disabled = true;
+                                resendBtn.textContent = 'Sending...';
+                                try {
+                                    const { error: resendError } = await supabase.auth.resend({
+                                        type: 'signup',
+                                        email: email.toLowerCase()
+                                    });
+                                    if (resendError) throw resendError;
+                                    resendBtn.textContent = 'Email Sent!';
+                                    setTimeout(() => {
+                                        resendBtn.disabled = false;
+                                        resendBtn.textContent = 'Resend Verification Email';
+                                    }, 3000);
+                                } catch (resendErr) {
+                                    console.error('Resend error:', resendErr);
+                                    resendBtn.textContent = 'Failed. Try again.';
+                                    resendBtn.disabled = false;
+                                }
+                            });
+                        }
+                    }
+                    return;
+                }
+                
+                // Login successful - reload app
+                window.location.reload();
+            } catch (err) {
+                console.error('Login error:', err);
+                if (errorDiv) {
+                    errorDiv.textContent = err.message || 'Invalid email or password.';
+                    errorDiv.style.display = 'block';
+                }
+            }
+        });
+    }
+    
+    // Navigation links
+    const goToSignupLink = document.getElementById('go-to-signup-link');
+    if (goToSignupLink) {
+        goToSignupLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            showScreen('signup-screen');
+        });
+    }
+    
+    const goToLoginLink = document.getElementById('go-to-login-link');
+    if (goToLoginLink) {
+        goToLoginLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            showScreen('login-screen');
+        });
+    }
+}
+
+// Get business for user (one business per user)
+async function getBusinessForUser(userId) {
+    const supabase = await getSupabaseAsync();
+    if (!supabase) return null;
+    
+    const { data, error } = await supabase
+        .from('businesses')
+        .select('*')
+        .eq('user_id', userId)
+        .limit(1)
+        .single();
+    
+    if (error || !data) return null;
+    
+    return {
+        id: data.id,
+        name: data.name,
+        email: data.email || null,
+        phone: data.phone,
+        createdAt: data.created_at
+    };
+}
+
+// Load user data (clients and measurements)
+async function loadUserData(userId) {
+    try {
+        // Load business
+        const business = await getBusinessForUser(userId);
+        if (business) {
+            updateBusinessHeaderSync(business);
+            updateNavbarBusinessNameSync(business);
+        }
+        
+        // Load clients and measurements
+        await getClients(true);
+        await getMeasurements(true);
+        
+        // Render recent measurements
+        renderRecentMeasurements();
+    } catch (err) {
+        console.error('Error loading user data:', err);
+    }
+}
+
+// Get current authenticated user
+async function getCurrentUser() {
+    const supabase = await getSupabaseAsync();
+    if (!supabase) return null;
+    
+    const { data: { user }, error } = await supabase.auth.getUser();
+    if (error || !user) return null;
+    return user;
+}
+
+// Get clients (updated to use user_id)
+async function getClients(forceRefresh = false) {
+    const user = await getCurrentUser();
+    if (!user) return [];
+    
+    const supabase = await getSupabaseAsync();
+    if (!supabase) return [];
+    
+    const { data, error } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+    
+    if (error) {
+        console.error('Error fetching clients:', error);
+        return [];
+    }
+    
+    const clients = (data || []).map(c => ({
+        id: c.id,
+        name: c.name,
+        phone: c.phone || '',
+        sex: c.sex || '',
+        createdAt: c.created_at
+    }));
+    
+    clientsCache = clients;
+    return clients;
+}
+
+// Get measurements (updated to use user_id)
+async function getMeasurements(forceRefresh = false) {
+    const user = await getCurrentUser();
+    if (!user) return [];
+    
+    const supabase = await getSupabaseAsync();
+    if (!supabase) return [];
+    
+    const { data, error } = await supabase
+        .from('measurements')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+    
+    if (error) {
+        console.error('Error fetching measurements:', error);
+        return [];
+    }
+    
+    const measurements = (data || []).map(m => ({
+        id: m.id,
+        client_id: m.client_id,
+        garment_type: m.garment_type || null,
+        date_created: m.created_at,
+        shoulder: m.shoulder || null,
+        chest: m.chest || null,
+        waist: m.waist || null,
+        sleeve: m.sleeve || null,
+        length: m.length || null,
+        neck: m.neck || null,
+        hip: m.hip || null,
+        inseam: m.inseam || null,
+        thigh: m.thigh || null,
+        seat: m.seat || null,
+        notes: m.notes || null,
+        customFields: m.custom_fields || {}
+    }));
+    
+    measurementsCache = measurements;
+    return measurements;
+}
+
+// Start retry mechanism for pending measurements (every 2-3 seconds)
+function startPendingMeasurementsRetry() {
+    // Clear existing interval if any
+    if (pendingMeasurementsRetryInterval) {
+        clearInterval(pendingMeasurementsRetryInterval);
+    }
+    
+    // Only start if we have pending measurements
+    const pendingMeasurementsJson = localStorage.getItem('pendingMeasurements');
+    const pendingMeasurements = safeJsonParse(pendingMeasurementsJson, []);
+    
+    if (pendingMeasurements.length === 0) {
+        return; // No pending measurements
+    }
+    
+    // Retry every 2.5 seconds
+    pendingMeasurementsRetryInterval = setInterval(async () => {
+        const pendingJson = localStorage.getItem('pendingMeasurements');
+        const pending = safeJsonParse(pendingJson, []);
+        
+        if (pending.length === 0) {
+            // No more pending measurements, stop retry
+            clearInterval(pendingMeasurementsRetryInterval);
+            pendingMeasurementsRetryInterval = null;
+            return;
+        }
+        
+        // Try to sync pending measurements
+        if (isOnline()) {
+            await syncPendingItems();
+        }
+    }, 2000); // 2 seconds for faster sync
+}
+
+// Stop retry mechanism
+function stopPendingMeasurementsRetry() {
+    if (pendingMeasurementsRetryInterval) {
+        clearInterval(pendingMeasurementsRetryInterval);
+        pendingMeasurementsRetryInterval = null;
+    }
+}
+
+// Helper function to get real client UUID by temp ID
+async function getClientUUIDByTempID(tempClientId) {
+    if (!tempClientId || !isTempId(tempClientId)) {
+        return null;
+    }
+    
+    // First, try to find in cache
+    const clients = getCachedClients();
+    const tempClient = clients.find(c => c.id === tempClientId);
+    
+    if (tempClient) {
+        // Check if there's a real client with the same name/phone in cache
+        const realClient = clients.find(c => 
+            !isTempId(c.id) && 
+            c.name === tempClient.name && 
+            c.phone === tempClient.phone
+        );
+        if (realClient) {
+            return realClient.id;
+        }
+    }
+    
+    // If not in cache, try to find in Supabase by matching name/phone
+    const supabase = await getSupabaseAsync();
+    if (!supabase) {
+        return null;
+    }
+    
+    const business = await getBusiness();
+    if (!business) {
+        return null;
+    }
+    
+    // Try to find client by name and phone (if we have temp client data)
+    if (tempClient) {
+        let query = supabase
+            .from('clients')
+            .select('id')
+            .eq('business_id', business.id)
+            .eq('name', tempClient.name);
+        
+        if (tempClient.phone) {
+            query = query.eq('phone', tempClient.phone);
+        } else {
+            query = query.is('phone', null);
+        }
+        
+        const { data, error } = await query.limit(1).single();
+        
+        if (!error && data) {
+            return data.id;
+        }
+    }
+    
+    return null;
+}
+
+// Sync pending measurements from localStorage
+async function syncPendingItems() {
+    try {
+        // Retrieve pending measurements from localStorage
+        const pendingMeasurementsJson = localStorage.getItem('pendingMeasurements');
+        if (!pendingMeasurementsJson) {
+            return; // No pending measurements
+        }
+        
+        const pendingMeasurements = safeJsonParse(pendingMeasurementsJson, []);
+        if (!Array.isArray(pendingMeasurements) || pendingMeasurements.length === 0) {
+            // Clear empty or invalid data
+            localStorage.removeItem('pendingMeasurements');
+            return;
+        }
+        
+        const supabase = await getSupabaseAsync();
+        if (!supabase) {
+            console.warn('Supabase not available, cannot sync pending measurements');
+            return;
+        }
+        
+        const business = await getBusiness();
+        if (!business) {
+            console.warn('No business found, cannot sync pending measurements');
+            return;
+        }
+        
+        const syncedMeasurements = [];
+        const failedMeasurements = [];
+        
+        // Process each measurement
+        for (const measurement of pendingMeasurements) {
+            try {
+                let clientId = measurement.client_id;
+                
+                // Check retry count - skip if exceeded max retries
+                const retryCount = measurement.retryCount || 0;
+                if (retryCount >= MAX_SYNC_RETRIES) {
+                    console.warn('Measurement exceeded max retries, skipping:', measurement.tempId || measurement.client_id);
+                    continue; // Skip this measurement
+                }
+                
+                // If client_id starts with 'temp_', replace it with real UUID
+                if (isTempId(clientId)) {
+                    const realClientId = await getClientUUIDByTempID(clientId);
+                    if (!realClientId) {
+                        console.warn('Could not resolve temp client ID, will retry:', clientId);
+                        // Increment retry count
+                        measurement.retryCount = retryCount + 1;
+                        failedMeasurements.push(measurement);
+                        continue; // Skip this measurement for now, will retry
+                    }
+                    clientId = realClientId;
+                }
+                
+                // Verify client exists in Supabase before inserting
+                const { data: clientCheck, error: clientError } = await supabase
+                    .from('clients')
+                    .select('id')
+                    .eq('id', clientId)
+                    .single();
+                
+                if (clientError || !clientCheck) {
+                    console.warn('Client not found in Supabase, will retry:', clientId);
+                    // Increment retry count
+                    measurement.retryCount = retryCount + 1;
+                    failedMeasurements.push(measurement);
+                    continue; // Skip this measurement for now, will retry
+                }
+                
+                // Build insert object, only including fields that have values
+                const insertData = {
+                    business_id: business.id,
+                    client_id: clientId
+                };
+                
+                // Add optional fields only if they have values
+                if (measurement.garment_type) insertData.garment_type = measurement.garment_type;
+                if (measurement.shoulder) insertData.shoulder = parseFloat(measurement.shoulder) || null;
+                if (measurement.chest) insertData.chest = parseFloat(measurement.chest) || null;
+                if (measurement.waist) insertData.waist = parseFloat(measurement.waist) || null;
+                if (measurement.sleeve) insertData.sleeve = parseFloat(measurement.sleeve) || null;
+                if (measurement.length) insertData.length = parseFloat(measurement.length) || null;
+                if (measurement.neck) insertData.neck = parseFloat(measurement.neck) || null;
+                if (measurement.hip) insertData.hip = parseFloat(measurement.hip) || null;
+                if (measurement.inseam) insertData.inseam = parseFloat(measurement.inseam) || null;
+                if (measurement.thigh) insertData.thigh = parseFloat(measurement.thigh) || null;
+                if (measurement.seat) insertData.seat = parseFloat(measurement.seat) || null;
+                if (measurement.notes) insertData.notes = measurement.notes;
+                if (measurement.custom_fields && Object.keys(measurement.custom_fields).length > 0) {
+                    insertData.custom_fields = measurement.custom_fields;
+                }
+                
+                // Insert the measurement into Supabase
+                const { data: newMeasurement, error: insertError } = await supabase
+                    .from('measurements')
+                    .insert([insertData])
+                    .select()
+                    .single();
+                
+                if (insertError) {
+                    console.error('Error inserting measurement:', insertError);
+                    console.error('Measurement data:', insertData);
+                    // Increment retry count
+                    measurement.retryCount = (measurement.retryCount || 0) + 1;
+                    failedMeasurements.push(measurement);
+                } else if (newMeasurement) {
+                    syncedMeasurements.push(measurement);
+                    
+                    // Update cache with real measurement
+                    const realMeasurement = {
+                        id: newMeasurement.id,
+                        client_id: newMeasurement.client_id,
+                        garment_type: newMeasurement.garment_type || null,
+                        date_created: newMeasurement.created_at,
+                        shoulder: newMeasurement.shoulder || null,
+                        chest: newMeasurement.chest || null,
+                        waist: newMeasurement.waist || null,
+                        sleeve: newMeasurement.sleeve || null,
+                        length: newMeasurement.length || null,
+                        neck: newMeasurement.neck || null,
+                        hip: newMeasurement.hip || null,
+                        inseam: newMeasurement.inseam || null,
+                        thigh: newMeasurement.thigh || null,
+                        seat: newMeasurement.seat || null,
+                        notes: newMeasurement.notes || null,
+                        customFields: newMeasurement.custom_fields || {}
+                    };
+                    addMeasurementToCache(realMeasurement);
+                }
+            } catch (err) {
+                console.error('Error processing pending measurement:', err);
+                console.error('Measurement:', measurement);
+                // Increment retry count on error
+                measurement.retryCount = (measurement.retryCount || 0) + 1;
+                failedMeasurements.push(measurement);
+            }
+        }
+        
+        // Filter out measurements that exceeded max retries
+        const retryableMeasurements = failedMeasurements.filter(m => (m.retryCount || 0) < MAX_SYNC_RETRIES);
+        const exceededRetries = failedMeasurements.filter(m => (m.retryCount || 0) >= MAX_SYNC_RETRIES);
+        
+        // If all measurements were synced successfully, remove the key
+        if (retryableMeasurements.length === 0 && exceededRetries.length === 0) {
+            localStorage.removeItem('pendingMeasurements');
+            console.log(`Successfully synced ${syncedMeasurements.length} pending measurements`);
+            stopPendingMeasurementsRetry();
+        } else {
+            // Save back only the retryable failed measurements
+            if (retryableMeasurements.length > 0) {
+                localStorage.setItem('pendingMeasurements', safeJsonStringify(retryableMeasurements));
+                console.warn(`Synced ${syncedMeasurements.length} measurements, ${retryableMeasurements.length} failed and will be retried`);
+                // Continue retry mechanism
+                startPendingMeasurementsRetry();
+            } else {
+                localStorage.removeItem('pendingMeasurements');
+                stopPendingMeasurementsRetry();
+            }
+            
+            // Only notify user if measurements exceeded retries
+            if (exceededRetries.length > 0) {
+                showToast(`${exceededRetries.length} measurement(s) failed to sync after multiple attempts. They will be retried later.`, 'warning', 5000);
+            }
+        }
+        
+        // Update UI if measurements were synced
+        if (syncedMeasurements.length > 0) {
+            const currentScreen = document.querySelector('.screen.active');
+            if (currentScreen?.id === 'home-screen') {
+                renderRecentMeasurements().catch(err => console.warn('Error rendering measurements:', err));
+            }
+        }
+    } catch (err) {
+        console.error('Error in syncPendingItems:', err);
+    }
+}
+
+// ========== BACKGROUND SYNC FUNCTION ==========
+// Process pending sync queue when online
+async function processPendingSyncQueue() {
+    if (!isOnline()) {
+        return; // Don't sync if offline
+    }
+    
+    const queue = getPendingSyncQueue();
+    if (queue.length === 0) {
+        updateSyncStatusIndicator();
+        return;
+    }
+    
+    const supabase = await getSupabaseAsync();
+    if (!supabase) {
+        return; // Supabase not ready
+    }
+    
+    const business = await getBusiness();
+    if (!business) {
+        return; // No business found
+    }
+    
+    updateSyncStatusIndicator();
+    
+    // Process each item in the queue
+    for (const item of [...queue]) { // Copy array to avoid modification during iteration
+        try {
+            // Skip items that have exceeded max retries
+            if (item.retryCount >= MAX_SYNC_RETRIES) {
+                console.warn('Item exceeded max retries, skipping:', item.id);
+                // Remove from queue but keep in localStorage for manual retry
+                removeFromPendingSyncQueue(item.id);
+                // Only notify user once when max retries is first exceeded
+                if (item.retryCount === MAX_SYNC_RETRIES) {
+                    showToast('Some items failed to sync after multiple attempts. They will be retried later.', 'warning', 4000);
+                }
+                continue;
+            }
+            
+            let success = false;
+            
+            if (item.action === 'create_client') {
+                const { data: newClient, error } = await supabase
+                    .from('clients')
+                    .insert([{
+                        business_id: item.data.business_id,
+                        name: item.data.name,
+                        phone: item.data.phone || null,
+                        sex: item.data.sex || null
+                    }])
+                    .select()
+                    .single();
+                
+                if (!error && newClient) {
+                    // Replace temp client with real one
+                    const tempId = item.data.tempId;
+                    if (tempId) {
+                        removeClientFromCache(tempId);
+                    }
+                    const realClient = {
+                        id: newClient.id,
+                        name: newClient.name,
+                        phone: newClient.phone || '',
+                        sex: newClient.sex || '',
+                        createdAt: newClient.created_at
+                    };
+                    addClientToCache(realClient);
+                    
+                    // Update all pending measurements that reference this temp client_id
+                    updatePendingMeasurementsClientId(tempId, newClient.id);
+                    
+                    success = true;
+                    
+                    // After client sync, trigger measurement sync
+                    setTimeout(() => syncPendingItems(), 100);
+                }
+            } else if (item.action === 'create_measurement') {
+                // Check if client_id is still a temp ID - if so, try to resolve it
+                let clientId = item.data.client_id;
+                const tempClientId = item.data.tempClientId;
+                
+                if (isTempId(clientId)) {
+                    // Try to get real client ID from cache
+                    const realClientId = getRealClientId(clientId);
+                    if (realClientId) {
+                        clientId = realClientId;
+                        // Update the queue item with real client ID
+                        item.data.client_id = realClientId;
+                    } else {
+                        // Client still not synced - skip this measurement for now
+                        console.warn('Skipping measurement sync - client not yet synced:', clientId);
+                        continue; // Skip to next item
+                    }
+                }
+                
+                // Verify client exists in Supabase before creating measurement
+                const { data: clientCheck, error: clientError } = await supabase
+                    .from('clients')
+                    .select('id')
+                    .eq('id', clientId)
+                    .single();
+                
+                if (clientError || !clientCheck) {
+                    // Client doesn't exist yet - skip this measurement
+                    console.warn('Client not found in Supabase, skipping measurement sync:', clientId);
+                    continue; // Skip to next item
+                }
+                
+                // Build insert object, only including fields that have values
+                const insertData = {
+                    business_id: item.data.business_id,
+                    client_id: clientId // Use resolved real client ID
+                };
+                
+                // Add optional fields only if they have values
+                if (item.data.garment_type) insertData.garment_type = item.data.garment_type;
+                if (item.data.shoulder) insertData.shoulder = parseFloat(item.data.shoulder) || null;
+                if (item.data.chest) insertData.chest = parseFloat(item.data.chest) || null;
+                if (item.data.waist) insertData.waist = parseFloat(item.data.waist) || null;
+                if (item.data.sleeve) insertData.sleeve = parseFloat(item.data.sleeve) || null;
+                if (item.data.length) insertData.length = parseFloat(item.data.length) || null;
+                if (item.data.neck) insertData.neck = parseFloat(item.data.neck) || null;
+                if (item.data.hip) insertData.hip = parseFloat(item.data.hip) || null;
+                if (item.data.inseam) insertData.inseam = parseFloat(item.data.inseam) || null;
+                if (item.data.thigh) insertData.thigh = parseFloat(item.data.thigh) || null;
+                if (item.data.seat) insertData.seat = parseFloat(item.data.seat) || null;
+                if (item.data.notes) insertData.notes = item.data.notes;
+                if (item.data.custom_fields && Object.keys(item.data.custom_fields).length > 0) {
+                    insertData.custom_fields = item.data.custom_fields;
+                }
+                
+                const { data: newMeasurement, error } = await supabase
+                    .from('measurements')
+                    .insert([insertData])
+                    .select()
+                    .single();
+                
+                if (!error && newMeasurement) {
+                    // Replace temp measurement with real one
+                    const tempId = item.data.tempId;
+                    if (tempId) {
+                        removeMeasurementFromCache(tempId);
+                    }
+                    const realMeasurement = {
+                        id: newMeasurement.id,
+                        client_id: newMeasurement.client_id,
+                        garment_type: newMeasurement.garment_type || null,
+                        date_created: newMeasurement.created_at,
+                        shoulder: newMeasurement.shoulder || null,
+                        chest: newMeasurement.chest || null,
+                        waist: newMeasurement.waist || null,
+                        sleeve: newMeasurement.sleeve || null,
+                        length: newMeasurement.length || null,
+                        neck: newMeasurement.neck || null,
+                        hip: newMeasurement.hip || null,
+                        inseam: newMeasurement.inseam || null,
+                        thigh: newMeasurement.thigh || null,
+                        seat: newMeasurement.seat || null,
+                        notes: newMeasurement.notes || null,
+                        customFields: newMeasurement.custom_fields || {}
+                    };
+                    addMeasurementToCache(realMeasurement);
+                    success = true;
+                }
+            } else if (item.action === 'update_client') {
+                const { data, error } = await supabase
+                    .from('clients')
+                    .update({
+                        name: item.data.name,
+                        phone: item.data.phone || null,
+                        sex: item.data.sex || null
+                    })
+                    .eq('id', item.data.clientId)
+                    .select()
+                    .single();
+                
+                if (!error && data) {
+                    updateClientInCache(item.data.clientId, {
+                        id: data.id,
+                        name: data.name,
+                        phone: data.phone || '',
+                        sex: data.sex || '',
+                        createdAt: data.created_at
+                    });
+                    success = true;
+                }
+            } else if (item.action === 'update_measurement') {
+                const { data, error } = await supabase
+                    .from('measurements')
+                    .update({
+                        garment_type: item.data.garment_type || null,
+                        shoulder: item.data.shoulder || null,
+                        chest: item.data.chest || null,
+                        waist: item.data.waist || null,
+                        sleeve: item.data.sleeve || null,
+                        length: item.data.length || null,
+                        neck: item.data.neck || null,
+                        hip: item.data.hip || null,
+                        inseam: item.data.inseam || null,
+                        thigh: item.data.thigh || null,
+                        seat: item.data.seat || null,
+                        notes: item.data.notes || null,
+                        custom_fields: item.data.custom_fields || {}
+                    })
+                    .eq('id', item.data.measurementId)
+                    .select()
+                    .single();
+                
+                if (!error && data) {
+                    updateMeasurementInCache(item.data.measurementId, {
+                        id: data.id,
+                        client_id: data.client_id,
+                        garment_type: data.garment_type || null,
+                        date_created: data.created_at,
+                        shoulder: data.shoulder || null,
+                        chest: data.chest || null,
+                        waist: data.waist || null,
+                        sleeve: data.sleeve || null,
+                        length: data.length || null,
+                        neck: data.neck || null,
+                        hip: data.hip || null,
+                        inseam: data.inseam || null,
+                        thigh: data.thigh || null,
+                        seat: data.seat || null,
+                        notes: data.notes || null,
+                        customFields: data.custom_fields || {}
+                    });
+                    success = true;
+                }
+            }
+            
+            // Remove from queue if successful
+            if (success) {
+                removeFromPendingSyncQueue(item.id);
+            } else {
+                // Increment retry count on failure
+                item.retryCount = (item.retryCount || 0) + 1;
+                // Update item in queue with new retry count
+                const updatedQueue = getPendingSyncQueue();
+                const itemIndex = updatedQueue.findIndex(q => q.id === item.id);
+                if (itemIndex !== -1) {
+                    updatedQueue[itemIndex].retryCount = item.retryCount;
+                    savePendingSyncQueue(updatedQueue);
+                }
+            }
+        } catch (err) {
+            console.error('Error syncing item:', item.id, err);
+            // Increment retry count on error
+            item.retryCount = (item.retryCount || 0) + 1;
+            // Update item in queue with new retry count
+            const updatedQueue = getPendingSyncQueue();
+            const itemIndex = updatedQueue.findIndex(q => q.id === item.id);
+            if (itemIndex !== -1) {
+                updatedQueue[itemIndex].retryCount = item.retryCount;
+                savePendingSyncQueue(updatedQueue);
+            }
+            // Keep item in queue for retry (unless max retries exceeded)
+            if (item.retryCount >= MAX_SYNC_RETRIES) {
+                removeFromPendingSyncQueue(item.id);
+                showToast('Some items failed to sync after multiple attempts. They will be retried later.', 'warning', 5000);
+            }
+        }
+    }
+    
+    // Update UI if queue was processed
+    const remainingQueue = getPendingSyncQueue();
+    if (remainingQueue.length === 0) {
+        // Refresh UI to show synced data
+        if (typeof renderClientsList === 'function') {
+            renderClientsList();
+        }
+        if (typeof renderRecentMeasurements === 'function') {
+            renderRecentMeasurements();
+        }
+    }
+    
+    updateSyncStatusIndicator();
+}
+
+// Initialize offline sync system
+// initializeOfflineSync removed - offline sync is disabled
+
 // Wait for DOM to be ready
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initializeApp);
+    document.addEventListener('DOMContentLoaded', () => {
+        initializeApp();
+    });
 } else {
     initializeApp();
 }

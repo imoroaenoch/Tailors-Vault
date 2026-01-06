@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Script from 'next/script'
+import MobileFooter from './components/MobileFooter'
 
 export default function Home() {
   const [theme, setThemeState] = useState<'dark' | 'light'>('dark')
@@ -14,15 +15,26 @@ export default function Home() {
       document.documentElement.setAttribute('data-theme', savedTheme)
 
       // Initialize Supabase client globally for app.js to use
-      if (!(window as any).supabaseClient) {
+      // Only create one instance to avoid multiple GoTrueClient warnings
+      if (!(window as any).supabaseClient && !(window as any).supabaseInitInProgress) {
+        (window as any).supabaseInitInProgress = true;
         (async () => {
           try {
             const { createClient } = await import('@supabase/supabase-js')
             const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
             const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
             if (supabaseUrl && supabaseKey) {
-              (window as any).supabaseClient = createClient(supabaseUrl, supabaseKey)
-              console.log('Supabase client initialized successfully')
+              // Only create if it doesn't exist (prevent multiple instances)
+              if (!(window as any).supabaseClient) {
+                (window as any).supabaseClient = createClient(supabaseUrl, supabaseKey, {
+                  auth: {
+                    persistSession: true,
+                    autoRefreshToken: true,
+                    detectSessionInUrl: true
+                  }
+                })
+                console.log('Supabase client initialized successfully')
+              }
             } else {
               console.error('Supabase environment variables not set:', {
                 url: !!supabaseUrl,
@@ -32,9 +44,11 @@ export default function Home() {
             }
           } catch (err) {
             console.error('Failed to initialize Supabase:', err)
+          } finally {
+            (window as any).supabaseInitInProgress = false;
           }
         })()
-      } else {
+      } else if ((window as any).supabaseClient) {
         console.log('Supabase client already initialized')
       }
     }
@@ -56,8 +70,104 @@ export default function Home() {
 
   return (
     <>
+      {/* Login Screen */}
+      <div id="login-screen" className="screen active">
+        <div className="business-setup-container">
+          <div className="business-setup-wrapper">
+            <div className="business-setup-logo">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="currentColor"/>
+              </svg>
+            </div>
+            <h1 className="business-setup-title">Tailor's Vault</h1>
+            <div className="business-setup-card">
+              <h2 style={{ marginBottom: '24px', fontSize: '24px', fontWeight: 600 }}>Login</h2>
+              <form id="login-form">
+                <div className="form-group">
+                  <label htmlFor="login-email">Email <span className="required">*</span></label>
+                  <input type="email" id="login-email" required autoComplete="email" placeholder="your@email.com" />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="login-password">Password <span className="required">*</span></label>
+                  <input type="password" id="login-password" required autoComplete="current-password" placeholder="Enter your password" />
+                </div>
+
+                <button type="submit" className="btn btn-primary btn-save" style={{ width: '100%', marginTop: '8px' }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                    <polyline points="10 17 15 12 10 7"></polyline>
+                    <line x1="15" y1="12" x2="3" y2="12"></line>
+                  </svg>
+                  Login
+                </button>
+              </form>
+              <p style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', color: 'var(--text-secondary)' }}>
+                Don't have an account?{' '}
+                <a href="#" id="go-to-signup-link" style={{ color: 'var(--accent-yellow)', textDecoration: 'none', fontWeight: 500 }}>
+                  Create account
+                </a>
+              </p>
+              <div id="login-error" style={{ marginTop: '16px', padding: '12px', borderRadius: '8px', backgroundColor: 'var(--bg-secondary)', color: '#ef4444', fontSize: '14px', display: 'none' }}></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Sign Up Screen */}
+      <div id="signup-screen" className="screen">
+        <div className="business-setup-container">
+          <div className="business-setup-wrapper">
+            <div className="business-setup-logo">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="currentColor"/>
+              </svg>
+            </div>
+            <h1 className="business-setup-title">Tailor's Vault</h1>
+            <div className="business-setup-card">
+              <h2 style={{ marginBottom: '24px', fontSize: '24px', fontWeight: 600 }}>Create Account</h2>
+              <form id="signup-form">
+                <div className="form-group">
+                  <label htmlFor="signup-email">Email <span className="required">*</span></label>
+                  <input type="email" id="signup-email" required autoComplete="email" placeholder="your@email.com" />
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="signup-password">Password <span className="required">*</span></label>
+                  <input type="password" id="signup-password" required autoComplete="new-password" placeholder="Create a password" />
+                  <small className="form-helper-text">Minimum 6 characters</small>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="signup-confirm-password">Confirm Password <span className="required">*</span></label>
+                  <input type="password" id="signup-confirm-password" required autoComplete="new-password" placeholder="Confirm your password" />
+                </div>
+
+                <button type="submit" className="btn btn-primary btn-save" style={{ width: '100%', marginTop: '8px' }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="8.5" cy="7" r="4"></circle>
+                    <line x1="20" y1="8" x2="20" y2="14"></line>
+                    <line x1="23" y1="11" x2="17" y2="11"></line>
+                  </svg>
+                  Create Account
+                </button>
+              </form>
+              <p style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', color: 'var(--text-secondary)' }}>
+                Already have an account?{' '}
+                <a href="#" id="go-to-login-link" style={{ color: 'var(--accent-yellow)', textDecoration: 'none', fontWeight: 500 }}>
+                  Login
+                </a>
+              </p>
+              <div id="signup-error" style={{ marginTop: '16px', padding: '12px', borderRadius: '8px', backgroundColor: 'var(--bg-secondary)', color: '#ef4444', fontSize: '14px', display: 'none' }}></div>
+              <div id="signup-success" style={{ marginTop: '16px', padding: '12px', borderRadius: '8px', backgroundColor: 'var(--bg-secondary)', color: '#10b981', fontSize: '14px', display: 'none' }}></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Business Setup Screen */}
-      <div id="business-setup-screen" className="screen">
+      <div id="business-setup-screen" className="screen" style={{ display: 'none' }}>
         <div className="business-setup-container">
           <div className="business-setup-wrapper">
             <div className="business-setup-logo">
@@ -76,8 +186,9 @@ export default function Home() {
                 </div>
 
                 <div className="form-group">
-                  <label htmlFor="business-email">Business Email <span className="required">*</span></label>
-                  <input type="email" id="business-email" required autoComplete="off" placeholder="e.g., info@elitetailors.com" />
+                  <label htmlFor="business-email">Business Email <span className="optional">(Optional)</span></label>
+                  <input type="email" id="business-email" autoComplete="off" placeholder="e.g., info@elitetailors.com" />
+                  <small className="form-helper-text">Optional: For account recovery and multi-device access</small>
                 </div>
 
                 <div className="form-group">
@@ -165,11 +276,13 @@ export default function Home() {
           </div>
           
           <div className="recent-section">
-            <div className="recent-section-header">
-              <h3>Recent Measurements</h3>
-              <div id="recent-measurements-control"></div>
+            <div className="recent-measurements-card">
+              <div className="recent-measurements-header">
+                <h3>Recent Measurements</h3>
+                <div id="recent-measurements-control"></div>
+              </div>
+              <div id="recent-measurements" className="recent-measurements-list"></div>
             </div>
-            <div id="recent-measurements" className="recent-list"></div>
           </div>
         </div>
       </div>
@@ -230,6 +343,38 @@ export default function Home() {
               <button id="edit-business-btn" className="btn btn-secondary" style={{ marginTop: '16px' }}>
                 Edit Business
               </button>
+            </div>
+
+            <div className="settings-section" style={{ marginTop: '40px' }}>
+              <h3>Email Linking</h3>
+              <p className="settings-info">Link your email to sync data across devices and enable account recovery.</p>
+              <div id="email-linking-status" className="email-linking-status"></div>
+              <div id="email-linking-form" className="email-linking-form" style={{ display: 'none' }}>
+                <div className="form-group" style={{ marginTop: '16px' }}>
+                  <label htmlFor="link-email-input">Email Address</label>
+                  <input 
+                    type="email" 
+                    id="link-email-input" 
+                    autoComplete="email" 
+                    placeholder="your@email.com"
+                    style={{ marginTop: '8px' }}
+                  />
+                </div>
+                <button id="send-verification-btn" className="btn btn-primary" style={{ marginTop: '12px' }}>
+                  Send Verification Link
+                </button>
+              </div>
+              <div id="email-verification-pending" className="email-verification-pending" style={{ display: 'none' }}>
+                <p className="settings-info" style={{ marginBottom: '12px' }}>
+                  Verification email sent! Check your inbox and click the link to verify.
+                </p>
+                <button id="resend-verification-btn" className="btn btn-secondary" style={{ marginRight: '8px' }}>
+                  Resend Email
+                </button>
+                <button id="cancel-verification-btn" className="btn btn-secondary">
+                  Cancel
+                </button>
+              </div>
             </div>
 
             <div className="settings-section" style={{ marginTop: '40px' }}>
@@ -307,8 +452,9 @@ export default function Home() {
             </div>
 
             <div className="form-group">
-              <label htmlFor="edit-business-email">Business Email <span className="required">*</span></label>
-              <input type="email" id="edit-business-email" required autoComplete="off" />
+              <label htmlFor="edit-business-email">Business Email <span className="optional">(Optional)</span></label>
+              <input type="email" id="edit-business-email" autoComplete="off" />
+              <small className="form-helper-text">Optional: For account recovery and multi-device access</small>
             </div>
 
             <div className="form-group">
@@ -339,8 +485,9 @@ export default function Home() {
             </div>
 
             <div className="form-group">
-              <label htmlFor="login-business-email">Business Email <span className="required">*</span></label>
-              <input type="email" id="login-business-email" required autoComplete="off" />
+              <label htmlFor="login-business-email">Business Email <span className="optional">(Optional)</span></label>
+              <input type="email" id="login-business-email" autoComplete="off" />
+              <small className="form-helper-text">Leave empty if you didn't set an email</small>
             </div>
 
             <div className="form-group">
@@ -852,6 +999,9 @@ export default function Home() {
       </div>
 
       <Script src="/app.js" strategy="afterInteractive" />
+      
+      {/* Mobile Footer Navigation */}
+      <MobileFooter />
     </>
   )
 }
