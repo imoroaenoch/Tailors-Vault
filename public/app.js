@@ -38,6 +38,11 @@ let pendingMeasurementsRetryInterval = null; // Interval for retrying pending me
 let appReady = false;
 let isHydrated = false;
 
+// Auth ready state - tracks ONLY Supabase auth resolution (not business/data loading)
+let authReady = false;
+let authTimeoutId = null;
+const AUTH_TIMEOUT_MS = 5000; // 5 seconds timeout failsafe
+
 // Performance: Cache DOM elements
 let cachedScreens = null;
 let businessDataCache = null;
@@ -4301,6 +4306,7 @@ function setupAuthStateListener() {
 }
 
 // Restore user session and route to correct screen
+// NOTE: This function is NON-BLOCKING - loader should already be hidden before this is called
 async function restoreUserSession(userId) {
     try {
         console.log('[Auth] Restoring session for user:', userId);
@@ -4318,10 +4324,10 @@ async function restoreUserSession(userId) {
         }
         
         // Check if business exists for this user
-        // Try cache first for offline support
+        // Try cache first for offline support (non-blocking)
         let business = getCachedBusiness();
         
-        // If no cache or cache is stale, fetch from Supabase
+        // If no cache or cache is stale, fetch from Supabase (non-blocking)
         if (!business || !isOnline()) {
             try {
                 const fetchedBusiness = await getBusinessForUser(userId);
@@ -4357,13 +4363,14 @@ async function restoreUserSession(userId) {
             // Show dashboard
             showScreen('home-screen');
             
-            // Update UI with business info
+            // Update UI with business info (non-blocking)
             updateBusinessHeaderSync(business);
             updateNavbarBusinessNameSync(business);
             
-            // Load user data (non-blocking)
+            // Load user data (non-blocking, doesn't block UI)
             loadUserData(userId).catch(err => {
-                console.error('Error loading user data:', err);
+                console.error('[Auth] Error loading user data:', err);
+                // Don't block UI if data loading fails - user can still use the app
             });
         }
     } catch (err) {
@@ -4439,6 +4446,17 @@ function initializeApp() {
     // Setup authentication form handlers (but don't show screens yet)
     setupAuthForms();
     
+    // CRITICAL: Set up timeout failsafe - if auth hasn't resolved in 5 seconds, proceed as unauthenticated
+    authTimeoutId = setTimeout(() => {
+        if (!authReady) {
+            console.warn('[Init] Auth timeout - proceeding as unauthenticated');
+            authReady = true;
+            hideLoadingScreen();
+            if (loadingScreen) loadingScreen.style.display = 'none';
+            showScreen('login-screen');
+        }
+    }, AUTH_TIMEOUT_MS);
+    
     // Wait for Supabase to be initialized, then check auth BEFORE showing any screen
     (async function() {
         try {
@@ -4448,10 +4466,15 @@ function initializeApp() {
             
             if (!supabase) {
                 console.error('[Init] Supabase client failed to initialize');
-                hideLoadingScreen();
-                if (loadingScreen) loadingScreen.style.display = 'none';
-                showToast('Unable to connect to database. Please check your connection.', 'error', 5000);
-                showScreen('login-screen');
+                // Auth ready (even though failed) - we know the state (unauthenticated)
+                if (!authReady) {
+                    authReady = true;
+                    if (authTimeoutId) clearTimeout(authTimeoutId);
+                    hideLoadingScreen();
+                    if (loadingScreen) loadingScreen.style.display = 'none';
+                    showToast('Unable to connect to database. Please check your connection.', 'error', 5000);
+                    showScreen('login-screen');
+                }
                 return;
             }
             
@@ -4462,8 +4485,13 @@ function initializeApp() {
             // Check authentication status - Supabase automatically restores session from localStorage
             const { data: { session }, error: sessionError } = await supabase.auth.getSession();
             
+            // CRITICAL: Auth state is now known - set authReady IMMEDIATELY (before any data loading)
+            authReady = true;
+            if (authTimeoutId) clearTimeout(authTimeoutId);
+            
             if (sessionError) {
                 console.error('[Init] Session error:', sessionError);
+                // Auth state known (error = unauthenticated) - hide loader immediately
                 hideLoadingScreen();
                 if (loadingScreen) loadingScreen.style.display = 'none';
                 showScreen('login-screen');
@@ -4472,6 +4500,7 @@ function initializeApp() {
             
             if (!session || !session.user) {
                 console.log('[Init] No active session, showing login screen');
+                // Auth state known (no session = unauthenticated) - hide loader immediately
                 hideLoadingScreen();
                 if (loadingScreen) loadingScreen.style.display = 'none';
                 showScreen('login-screen');
@@ -4479,16 +4508,26 @@ function initializeApp() {
             }
             
             console.log('[Init] User authenticated:', session.user.email);
-            // User is authenticated - restore their session and route correctly
-            // Do NOT show login/business-setup screens - go straight to dashboard if authenticated
-            await restoreUserSession(session.user.id);
-            
-            // Hide loading screen after routing is complete
+            // Auth state known (authenticated) - hide loader IMMEDIATELY before data loading
             hideLoadingScreen();
             if (loadingScreen) loadingScreen.style.display = 'none';
             
+            // User is authenticated - restore their session and route correctly
+            // Do NOT wait for this to complete - it's non-blocking
+            // Do NOT show login/business-setup screens - go straight to dashboard if authenticated
+            restoreUserSession(session.user.id).catch(err => {
+                console.error('[Init] Error restoring user session:', err);
+                // If restore fails, still show login (user can try again)
+                showScreen('login-screen');
+            });
+            
         } catch (err) {
             console.error('[Init] Error during app initialization:', err);
+            // Auth state known (error = unauthenticated) - hide loader immediately
+            if (!authReady) {
+                authReady = true;
+                if (authTimeoutId) clearTimeout(authTimeoutId);
+            }
             hideLoadingScreen();
             if (loadingScreen) loadingScreen.style.display = 'none';
             // On error, show login screen
