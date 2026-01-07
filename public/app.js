@@ -1098,7 +1098,7 @@ async function findBusinessByCredentials(name, email, phone) {
 
 // Logout - Set logged out state without deleting data
 async function logoutBusiness() {
-    // Sign out from Supabase
+    // Sign out from Supabase (this clears auth session)
     const supabase = await getSupabaseAsync();
     if (supabase) {
         await supabase.auth.signOut();
@@ -1107,14 +1107,31 @@ async function logoutBusiness() {
     // Clear business cache
     clearBusinessCache();
     
-    // Clear all localStorage
-    localStorage.clear();
+    // Clear only auth-related localStorage keys (preserve IndexedDB data)
+    const authKeys = [
+        CACHE_BUSINESS_KEY,
+        CACHE_CLIENTS_KEY,
+        CACHE_MEASUREMENTS_KEY,
+        CACHE_TIMESTAMP_KEY,
+        CURRENT_BUSINESS_ID_KEY,
+        LOGOUT_STATE_KEY,
+        PENDING_SYNC_QUEUE_KEY
+    ];
     
-    // Clear all sessionStorage
+    authKeys.forEach(key => {
+        localStorage.removeItem(key);
+    });
+    
+    // Clear Supabase auth storage (handled by signOut, but ensure it's cleared)
     try {
-        sessionStorage.clear();
+        // Supabase stores auth in localStorage with specific keys
+        Object.keys(localStorage).forEach(key => {
+            if (key.startsWith('sb-') || key.includes('supabase.auth')) {
+                localStorage.removeItem(key);
+            }
+        });
     } catch (e) {
-        console.warn('Error clearing sessionStorage:', e);
+        console.warn('Error clearing Supabase auth storage:', e);
     }
     
     // Clear cache
@@ -1127,6 +1144,11 @@ async function logoutBusiness() {
     currentClientId = null;
     currentMeasurementId = null;
     currentMeasurementDetailId = null;
+    
+    // Stop background sync
+    if (window.syncManager) {
+        window.syncManager.stopBackgroundSync();
+    }
     previousScreen = 'home-screen';
     recentMeasurementsOffset = 0;
     recentMeasurementsExpanded = false;
@@ -4113,6 +4135,104 @@ async function initializeAuthListener() {
 }
 
 // ========== STANDARD AUTHENTICATION INITIALIZATION ==========
+// Setup auth state change listener for session persistence
+function setupAuthStateListener() {
+    const supabase = getSupabase();
+    if (!supabase) return;
+    
+    // Listen for auth state changes (token refresh, sign in, sign out)
+    supabase.auth.onAuthStateChange((event, session) => {
+        console.log('[Auth] State changed:', event, session?.user?.email || 'no user');
+        
+        if (event === 'SIGNED_OUT' || !session) {
+            // User signed out - ensure we're on login screen
+            showScreen('login-screen');
+            // Stop background sync
+            if (window.syncManager) {
+                window.syncManager.stopBackgroundSync();
+            }
+        } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+            // User signed in or token refreshed - restore app state
+            if (session && session.user) {
+                restoreUserSession(session.user.id).catch(err => {
+                    console.error('Error restoring user session:', err);
+                });
+            }
+        }
+    });
+}
+
+// Restore user session and route to correct screen
+async function restoreUserSession(userId) {
+    try {
+        console.log('[Auth] Restoring session for user:', userId);
+        
+        // Check if business exists for this user
+        // Try cache first for offline support
+        let business = getCachedBusiness();
+        
+        // If no cache or cache is stale, fetch from Supabase
+        if (!business || !isOnline()) {
+            try {
+                const fetchedBusiness = await getBusinessForUser(userId);
+                if (fetchedBusiness) {
+                    business = fetchedBusiness;
+                    // Update cache
+                    setCachedBusiness(business);
+                }
+            } catch (fetchErr) {
+                // If offline and we have cached business, use it
+                if (!isOnline() && business) {
+                    console.log('[Auth] Offline - using cached business data');
+                } else {
+                    // No cache and offline, or fetch failed
+                    console.warn('[Auth] Could not fetch business:', fetchErr);
+                    business = null;
+                }
+            }
+        }
+        
+        if (!business) {
+            console.log('[Auth] No business found, showing business setup');
+            showScreen('business-setup-screen');
+        } else {
+            console.log('[Auth] Business found, showing dashboard');
+            showScreen('home-screen');
+            
+            // Update UI with business info
+            updateBusinessHeaderSync(business);
+            updateNavbarBusinessNameSync(business);
+            
+            // Load user data (non-blocking)
+            loadUserData(userId).catch(err => {
+                console.error('Error loading user data:', err);
+            });
+        }
+    } catch (err) {
+        console.error('[Auth] Error restoring session:', err);
+        // On error, check session again
+        const supabase = await getSupabaseAsync();
+        if (supabase) {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session || !session.user) {
+                showScreen('login-screen');
+            } else {
+                // Has session but error fetching business - try cache
+                const cachedBusiness = getCachedBusiness();
+                if (cachedBusiness) {
+                    showScreen('home-screen');
+                    updateBusinessHeaderSync(cachedBusiness);
+                    updateNavbarBusinessNameSync(cachedBusiness);
+                } else {
+                    showScreen('business-setup-screen');
+                }
+            }
+        } else {
+            showScreen('login-screen');
+        }
+    }
+}
+
 function initializeApp() {
     console.log('Initializing app...');
     
@@ -4155,82 +4275,52 @@ function initializeApp() {
     // Wait for Supabase to be initialized, then check auth
     (async function() {
         try {
-            console.log('Waiting for Supabase...');
+            console.log('[Init] Waiting for Supabase...');
             // Wait for Supabase client to be ready
             const supabase = await getSupabaseAsync();
             
             if (!supabase) {
-                console.error('Supabase client failed to initialize');
+                console.error('[Init] Supabase client failed to initialize');
                 hideLoadingScreen();
                 showToast('Unable to connect to database. Please check your connection.', 'error', 5000);
                 showScreen('login-screen');
                 return;
             }
             
-            console.log('Supabase ready, checking auth...');
-            // Check authentication status
+            // Setup auth state change listener for session persistence
+            setupAuthStateListener();
+            
+            console.log('[Init] Supabase ready, checking auth session...');
+            // Check authentication status - Supabase automatically restores session from localStorage
             const { data: { session }, error: sessionError } = await supabase.auth.getSession();
             
-            if (sessionError || !session || !session.user) {
-                console.log('Not authenticated, showing login screen');
-                // Not authenticated - show login screen
+            if (sessionError) {
+                console.error('[Init] Session error:', sessionError);
                 hideLoadingScreen();
                 showScreen('login-screen');
-            return;
-        }
-        
-            console.log('User authenticated:', session.user.email);
-            // User is authenticated - check if business exists
-            const userId = session.user.id;
-            
-            try {
-                const business = await getBusinessForUser(userId);
-                
-                if (!business) {
-                    console.log('No business found, showing business setup');
-                    // No business - show business setup
-                    hideLoadingScreen();
-                    showScreen('business-setup-screen');
-                } else {
-                    console.log('Business found, showing dashboard');
-                    // Business exists - show dashboard
-                    hideLoadingScreen();
-            showScreen('home-screen');
-                    
-                    // Load and display data (non-blocking)
-                    loadUserData(userId).catch(err => {
-                        console.error('Error loading user data:', err);
-                        // Still show dashboard even if data load fails
-                    });
-                }
-            } catch (businessError) {
-                // Error fetching business - check if user just logged out
-                console.error('Error fetching business:', businessError);
-                hideLoadingScreen();
-                // After logout, always show login screen, not business setup
-                const supabase = await getSupabaseAsync();
-                if (supabase) {
-                    const { data: { session } } = await supabase.auth.getSession();
-                    if (!session || !session.user) {
-                        // No session means user logged out - show login screen
-                        showScreen('login-screen');
-                    } else {
-                        // Has session but no business - show business setup
-                        showScreen('business-setup-screen');
-                    }
-                } else {
-                    // Fallback to login if Supabase not available
-                    showScreen('login-screen');
-                }
+                return;
             }
+            
+            if (!session || !session.user) {
+                console.log('[Init] No active session, showing login screen');
+                hideLoadingScreen();
+                showScreen('login-screen');
+                return;
+            }
+            
+            console.log('[Init] User authenticated:', session.user.email);
+            // User is authenticated - restore their session and route correctly
+            await restoreUserSession(session.user.id);
+            hideLoadingScreen();
+            
         } catch (err) {
-            console.error('Error during app initialization:', err);
+            console.error('[Init] Error during app initialization:', err);
             hideLoadingScreen();
             // Always show a screen - never leave blank
             showScreen('login-screen');
         } finally {
             // Setup all form listeners after screens are shown
-            console.log('Setting up form listeners...');
+            console.log('[Init] Setting up form listeners...');
             setupBusinessFormListener();
             // Other form listeners are set up inline where needed
         }
@@ -4421,8 +4511,14 @@ function setupAuthForms() {
                     return;
                 }
                 
-                // Login successful - reload app
-                window.location.reload();
+                // Login successful - restore session and route correctly
+                console.log('[Login] Login successful, restoring session...');
+                if (data.user) {
+                    await restoreUserSession(data.user.id);
+                } else {
+                    // Fallback to reload if user data not available
+                    window.location.reload();
+                }
             } catch (err) {
                 console.error('Login error:', err);
                 if (errorDiv) {
