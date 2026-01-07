@@ -102,13 +102,56 @@ export default function Home() {
                   Login
                 </button>
               </form>
-              <p style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', color: 'var(--text-secondary)' }}>
+              <p style={{ marginTop: '16px', textAlign: 'center', fontSize: '14px', color: 'var(--text-secondary)' }}>
+                <a href="#" id="forgot-password-link" style={{ color: 'var(--accent-yellow)', textDecoration: 'none', fontWeight: 500 }}>
+                  Forgot Password?
+                </a>
+              </p>
+              <p style={{ marginTop: '16px', textAlign: 'center', fontSize: '14px', color: 'var(--text-secondary)' }}>
                 Don't have an account?{' '}
                 <a href="#" id="go-to-signup-link" style={{ color: 'var(--accent-yellow)', textDecoration: 'none', fontWeight: 500 }}>
                   Create account
                 </a>
               </p>
               <div id="login-error" style={{ marginTop: '16px', padding: '12px', borderRadius: '8px', backgroundColor: 'var(--bg-secondary)', color: '#ef4444', fontSize: '14px', display: 'none' }}></div>
+              
+              {/* Forgot Password Form */}
+              <div id="forgot-password-form" style={{ marginTop: '24px', display: 'none' }}>
+                <div className="business-setup-card">
+                  <h2 style={{ marginBottom: '24px', fontSize: '24px', fontWeight: 600 }}>Reset Password</h2>
+                  <p className="settings-info" style={{ marginBottom: '20px', fontSize: '14px', color: 'var(--text-secondary)' }}>
+                    Enter your email address and we'll send you a link to reset your password.
+                  </p>
+                  <form id="forgot-password-submit-form">
+                    <div className="form-group">
+                      <label htmlFor="forgot-password-email">Email <span className="required">*</span></label>
+                      <input 
+                        type="email" 
+                        id="forgot-password-email" 
+                        required 
+                        autoComplete="email" 
+                        placeholder="your@email.com"
+                      />
+                    </div>
+                    <button type="submit" className="btn btn-primary btn-save" style={{ width: '100%', marginTop: '8px' }}>
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                        <polyline points="22,6 12,13 2,6"></polyline>
+                      </svg>
+                      Send Reset Link
+                    </button>
+                  </form>
+                  <button 
+                    id="cancel-forgot-password-btn" 
+                    className="btn btn-secondary" 
+                    style={{ width: '100%', marginTop: '12px' }}
+                  >
+                    Cancel
+                  </button>
+                  <div id="forgot-password-error" className="form-error-message" style={{ display: 'none' }}></div>
+                  <div id="forgot-password-success" className="form-success-message" style={{ display: 'none' }}></div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -375,6 +418,60 @@ export default function Home() {
                   Cancel
                 </button>
               </div>
+            </div>
+
+            <div className="settings-section" style={{ marginTop: '40px' }}>
+              <h3>Change Password</h3>
+              <p className="settings-info">Update your account password to keep your account secure.</p>
+              <form id="change-password-form" style={{ marginTop: '16px' }}>
+                <div className="form-section-card">
+                  <div className="form-section-content">
+                    <div className="form-group">
+                      <label htmlFor="current-password">Current Password <span className="required">*</span></label>
+                      <input 
+                        type="password" 
+                        id="current-password" 
+                        required 
+                        autoComplete="current-password" 
+                        placeholder="Enter your current password"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="new-password">New Password <span className="required">*</span></label>
+                      <input 
+                        type="password" 
+                        id="new-password" 
+                        required 
+                        autoComplete="new-password" 
+                        placeholder="Enter your new password"
+                        minLength={6}
+                      />
+                      <small className="form-helper-text">Minimum 6 characters</small>
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="confirm-new-password">Confirm New Password <span className="required">*</span></label>
+                      <input 
+                        type="password" 
+                        id="confirm-new-password" 
+                        required 
+                        autoComplete="new-password" 
+                        placeholder="Confirm your new password"
+                        minLength={6}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <button type="submit" className="btn btn-primary btn-save">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                  </svg>
+                  Update Password
+                </button>
+              </form>
+              <div id="change-password-error" className="form-error-message" style={{ display: 'none' }}></div>
+              <div id="change-password-success" className="form-success-message" style={{ display: 'none' }}></div>
             </div>
 
             <div className="settings-section" style={{ marginTop: '40px' }}>

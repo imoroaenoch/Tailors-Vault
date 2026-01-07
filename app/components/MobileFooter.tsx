@@ -5,6 +5,10 @@ import { useEffect, useState } from 'react'
 export default function MobileFooter() {
   const [isMobile, setIsMobile] = useState(false)
   const [activeScreen, setActiveScreen] = useState('home-screen')
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+
+  // Screens where footer should NOT appear
+  const excludedScreens = ['login-screen', 'signup-screen', 'business-setup-screen']
 
   useEffect(() => {
     // Check if mobile on mount and resize
@@ -15,6 +19,43 @@ export default function MobileFooter() {
     checkMobile()
     window.addEventListener('resize', checkMobile)
     
+    // Check authentication status
+    const checkAuth = async () => {
+      try {
+        // Wait for Supabase to be available (with timeout)
+        let attempts = 0
+        const maxAttempts = 50 // 5 seconds max wait
+        
+        const waitForSupabase = (): Promise<any> => {
+          return new Promise((resolve) => {
+            const checkSupabase = () => {
+              if ((window as any).supabaseClient) {
+                resolve((window as any).supabaseClient)
+              } else if (attempts < maxAttempts) {
+                attempts++
+                setTimeout(checkSupabase, 100)
+              } else {
+                resolve(null)
+              }
+            }
+            checkSupabase()
+          })
+        }
+        
+        const supabase = await waitForSupabase()
+        
+        if (supabase && typeof supabase.auth?.getSession === 'function') {
+          const { data: { session } } = await supabase.auth.getSession()
+          setIsAuthenticated(!!session)
+        } else {
+          setIsAuthenticated(false)
+        }
+      } catch (error) {
+        console.error('Error checking auth:', error)
+        setIsAuthenticated(false)
+      }
+    }
+    
     // Listen for screen changes to update active state
     const updateActiveScreen = () => {
       const active = document.querySelector('.screen.active')
@@ -24,22 +65,30 @@ export default function MobileFooter() {
     }
     
     // Use MutationObserver to watch for screen changes
-    const observer = new MutationObserver(updateActiveScreen)
+    const observer = new MutationObserver(() => {
+      updateActiveScreen()
+    })
+    
     const screens = document.querySelectorAll('.screen')
     screens.forEach(screen => {
       observer.observe(screen, { attributes: true, attributeFilter: ['class'] })
     })
     
-    // Initial check
+    // Initial checks
+    checkAuth()
     updateActiveScreen()
     
-    // Also check periodically as fallback
-    const interval = setInterval(updateActiveScreen, 500)
+    // Check auth periodically (in case user logs in/out)
+    const authInterval = setInterval(checkAuth, 2000)
+    
+    // Also check screen periodically as fallback
+    const screenInterval = setInterval(updateActiveScreen, 500)
     
     return () => {
       window.removeEventListener('resize', checkMobile)
       observer.disconnect()
-      clearInterval(interval)
+      clearInterval(authInterval)
+      clearInterval(screenInterval)
     }
   }, [])
 
@@ -105,7 +154,12 @@ export default function MobileFooter() {
     }
   }
 
-  if (!isMobile) {
+  // Determine if footer should be shown
+  const isExcluded = excludedScreens.includes(activeScreen)
+  const shouldShow = isMobile && isAuthenticated && !isExcluded
+
+  // Don't render if conditions are not met
+  if (!shouldShow) {
     return null
   }
 
@@ -184,4 +238,3 @@ export default function MobileFooter() {
     </footer>
   )
 }
-

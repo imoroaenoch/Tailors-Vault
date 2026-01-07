@@ -578,9 +578,32 @@ label {
     line-height: 1.4;
 }
 
+/* Form Error and Success Messages */
+.form-error-message {
+    margin-top: 16px;
+    padding: 12px;
+    border-radius: 8px;
+    background-color: var(--bg-secondary);
+    color: #ef4444;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.form-success-message {
+    margin-top: 16px;
+    padding: 12px;
+    border-radius: 8px;
+    background-color: var(--bg-secondary);
+    color: #10b981;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
 input[type="text"],
 input[type="tel"],
 input[type="number"],
+input[type="email"],
+input[type="password"],
 select,
 textarea {
     width: 100%;
@@ -600,6 +623,8 @@ textarea {
 input[type="text"]:focus,
 input[type="tel"]:focus,
 input[type="number"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
 select:focus,
 textarea:focus {
     outline: none;
@@ -799,6 +824,8 @@ textarea {
     input[type="text"],
     input[type="tel"],
     input[type="number"],
+    input[type="email"],
+    input[type="password"],
     select,
     textarea {
         padding: 10px 12px;

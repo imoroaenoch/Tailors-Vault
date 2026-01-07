@@ -4496,6 +4496,229 @@ function setupAuthForms() {
         });
     }
     
+    // Change Password Form
+    const changePasswordForm = document.getElementById('change-password-form');
+    if (changePasswordForm) {
+        changePasswordForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const currentPassword = document.getElementById('current-password').value;
+            const newPassword = document.getElementById('new-password').value;
+            const confirmNewPassword = document.getElementById('confirm-new-password').value;
+            
+            const errorDiv = document.getElementById('change-password-error');
+            const successDiv = document.getElementById('change-password-success');
+            
+            // Clear previous messages
+            if (errorDiv) errorDiv.style.display = 'none';
+            if (successDiv) successDiv.style.display = 'none';
+            
+            // Validate
+            if (!currentPassword) {
+                if (errorDiv) {
+                    errorDiv.textContent = 'Please enter your current password';
+                    errorDiv.style.display = 'block';
+                }
+                return;
+            }
+            
+            if (newPassword.length < 6) {
+                if (errorDiv) {
+                    errorDiv.textContent = 'New password must be at least 6 characters';
+                    errorDiv.style.display = 'block';
+                }
+                return;
+            }
+            
+            if (newPassword !== confirmNewPassword) {
+                if (errorDiv) {
+                    errorDiv.textContent = 'New passwords do not match';
+                    errorDiv.style.display = 'block';
+                }
+                return;
+            }
+            
+            if (currentPassword === newPassword) {
+                if (errorDiv) {
+                    errorDiv.textContent = 'New password must be different from current password';
+                    errorDiv.style.display = 'block';
+                }
+                return;
+            }
+            
+            try {
+                const supabase = await getSupabaseAsync();
+                if (!supabase) throw new Error('Database not available');
+                
+                // Verify current password by attempting to sign in
+                const { data: { user } } = await supabase.auth.getUser();
+                if (!user) throw new Error('You must be logged in to change your password');
+                
+                // Verify current password
+                const { error: verifyError } = await supabase.auth.signInWithPassword({
+                    email: user.email,
+                    password: currentPassword
+                });
+                
+                if (verifyError) {
+                    throw new Error('Current password is incorrect');
+                }
+                
+                // Update password
+                const { error: updateError } = await supabase.auth.updateUser({
+                    password: newPassword
+                });
+                
+                if (updateError) throw updateError;
+                
+                // Success
+                if (successDiv) {
+                    successDiv.textContent = 'Password updated successfully!';
+                    successDiv.style.display = 'block';
+                }
+                
+                // Clear form
+                changePasswordForm.reset();
+                
+                // Hide success message after 5 seconds
+                setTimeout(() => {
+                    if (successDiv) successDiv.style.display = 'none';
+                }, 5000);
+                
+            } catch (err) {
+                console.error('Change password error:', err);
+                if (errorDiv) {
+                    let errorMessage = err.message || 'Failed to update password. Please try again.';
+                    
+                    // Provide helpful error messages
+                    if (err.message && err.message.includes('incorrect')) {
+                        errorMessage = 'Current password is incorrect. Please try again.';
+                    } else if (err.message && err.message.includes('same')) {
+                        errorMessage = 'New password must be different from your current password.';
+                    } else if (err.message && err.message.includes('logged in')) {
+                        errorMessage = 'You must be logged in to change your password.';
+                    }
+                    
+                    errorDiv.textContent = errorMessage;
+                    errorDiv.style.display = 'block';
+                }
+            }
+        });
+    }
+    
+    // Forgot Password Link
+    const forgotPasswordLink = document.getElementById('forgot-password-link');
+    const forgotPasswordForm = document.getElementById('forgot-password-form');
+    const cancelForgotPasswordBtn = document.getElementById('cancel-forgot-password-btn');
+    
+    if (forgotPasswordLink && forgotPasswordForm) {
+        forgotPasswordLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            forgotPasswordForm.style.display = 'block';
+        });
+    }
+    
+    if (cancelForgotPasswordBtn && forgotPasswordForm) {
+        cancelForgotPasswordBtn.addEventListener('click', () => {
+            forgotPasswordForm.style.display = 'none';
+            // Clear form and messages
+            const submitForm = document.getElementById('forgot-password-submit-form');
+            if (submitForm) submitForm.reset();
+            const errorDiv = document.getElementById('forgot-password-error');
+            const successDiv = document.getElementById('forgot-password-success');
+            if (errorDiv) errorDiv.style.display = 'none';
+            if (successDiv) successDiv.style.display = 'none';
+        });
+    }
+    
+    // Forgot Password Form Submission
+    const forgotPasswordSubmitForm = document.getElementById('forgot-password-submit-form');
+    if (forgotPasswordSubmitForm) {
+        forgotPasswordSubmitForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('forgot-password-email').value.trim();
+            
+            const errorDiv = document.getElementById('forgot-password-error');
+            const successDiv = document.getElementById('forgot-password-success');
+            
+            // Clear previous messages
+            if (errorDiv) errorDiv.style.display = 'none';
+            if (successDiv) successDiv.style.display = 'none';
+            
+            // Validate email
+            if (!email) {
+                if (errorDiv) {
+                    errorDiv.textContent = 'Please enter your email address';
+                    errorDiv.style.display = 'block';
+                }
+                return;
+            }
+            
+            // Basic email validation
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                if (errorDiv) {
+                    errorDiv.textContent = 'Please enter a valid email address';
+                    errorDiv.style.display = 'block';
+                }
+                return;
+            }
+            
+            try {
+                const supabase = await getSupabaseAsync();
+                if (!supabase) throw new Error('Database not available');
+                
+                // Send password reset email
+                const { error } = await supabase.auth.resetPasswordForEmail(email.toLowerCase(), {
+                    redirectTo: `${window.location.origin}${window.location.pathname}#reset-password`
+                });
+                
+                if (error) throw error;
+                
+                // Success
+                if (successDiv) {
+                    successDiv.innerHTML = `
+                        <div style="margin-bottom: 8px;">
+                            <strong>Password reset email sent!</strong>
+                        </div>
+                        <div style="font-size: 13px; opacity: 0.9;">
+                            Check your email (${escapeHtml(email)}) for a password reset link. 
+                            The link will expire in 1 hour.
+                        </div>
+                    `;
+                    successDiv.style.display = 'block';
+                }
+                
+                // Clear form
+                forgotPasswordSubmitForm.reset();
+                
+                // Hide form after 5 seconds
+                setTimeout(() => {
+                    if (forgotPasswordForm) {
+                        forgotPasswordForm.style.display = 'none';
+                    }
+                }, 5000);
+                
+            } catch (err) {
+                console.error('Forgot password error:', err);
+                if (errorDiv) {
+                    let errorMessage = err.message || 'Failed to send reset email. Please try again.';
+                    
+                    // Provide helpful error messages
+                    if (err.message && err.message.includes('not found')) {
+                        errorMessage = 'No account found with this email address.';
+                    } else if (err.message && err.message.includes('email')) {
+                        errorMessage = 'Invalid email address. Please check and try again.';
+                    }
+                    
+                    errorDiv.textContent = errorMessage;
+                    errorDiv.style.display = 'block';
+                }
+            }
+        });
+    }
+    
     // Navigation links
     const goToSignupLink = document.getElementById('go-to-signup-link');
     if (goToSignupLink) {
