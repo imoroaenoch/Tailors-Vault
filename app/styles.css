@@ -52,6 +52,11 @@
     --custom-field-bg: #fffef0;
 }
 
+html {
+    height: 100%;
+    overflow: hidden;
+}
+
 body {
     font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
     background-color: var(--bg-primary);
@@ -59,6 +64,11 @@ body {
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
     transition: background-color 0.3s ease, color 0.3s ease;
+    height: 100%;
+    overflow: hidden;
+    width: 100%;
+    margin: 0;
+    padding: 0;
 }
 
 .container {
@@ -171,12 +181,14 @@ body {
 
 /* Auth Screen Wrapper - Full height container */
 .auth-screen-wrapper {
-    min-height: 100vh;
+    height: 100%;
+    min-height: 100%;
     display: flex;
     flex-direction: column;
     width: 100%;
     overflow: hidden;
     background-color: var(--bg-primary);
+    position: relative;
 }
 
 /* Auth Header Image - Top 30vh section */
@@ -191,10 +203,9 @@ body {
     flex-shrink: 0;
 }
 
-/* Auth Card Container - Bottom 70vh section */
+/* Auth Card Container - Bottom section */
 .auth-card-container {
     flex: 1;
-    min-height: 70vh;
     background-color: var(--bg-card);
     border-radius: 24px 24px 0 0;
     box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
@@ -202,7 +213,9 @@ body {
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
+    min-height: 0; /* Allow flex item to shrink */
 }
 
 [data-theme="light"] .auth-card-container {
@@ -311,9 +324,13 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 100vh;
+    height: 100%;
+    min-height: 100%;
     padding: 24px 20px;
     width: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
 }
 
 .business-setup-wrapper {
@@ -388,7 +405,6 @@ body {
     }
     
     .auth-card-container {
-        min-height: 75vh;
         padding: 24px 20px;
         border-radius: 20px 20px 0 0;
     }
@@ -422,10 +438,6 @@ body {
 @media (min-width: 481px) and (max-width: 768px) {
     .auth-header-image {
         height: 28vh;
-    }
-    
-    .auth-card-container {
-        min-height: 72vh;
     }
 }
 
@@ -843,16 +855,29 @@ body {
 /* Screen Management */
 .screen {
     display: none;
-    min-height: 100vh;
+    height: 100%;
+    min-height: 100%;
     padding-bottom: 32px;
     padding-top: 32px;
     opacity: 0;
     animation: fadeInScreen var(--transition-medium);
+    overflow: hidden;
+    position: relative;
+    box-sizing: border-box;
 }
 
 .screen.active {
     display: block;
     opacity: 1;
+}
+
+/* Allow scrolling in screen content when needed */
+.screen .container {
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    box-sizing: border-box;
 }
 
 @keyframes fadeInScreen {
@@ -1812,8 +1837,9 @@ textarea {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    max-height: calc(100vh - 200px);
+    max-height: calc(100% - 200px);
     overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 /* Leaderboard Card */

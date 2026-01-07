@@ -123,8 +123,9 @@ async function getClientsLocal(userId) {
         const request = index.getAll(userId);
         request.onsuccess = () => {
             const clients = request.result.map(c => ({
-                id: c.server_id || c.local_id,
-                local_id: c.local_id,
+                id: c.server_id || c.local_id, // Prefer server_id, fallback to local_id
+                server_id: c.server_id || null, // Include server_id explicitly
+                local_id: c.local_id, // Always include local_id for matching
                 name: c.name,
                 phone: c.phone || '',
                 sex: c.sex || '',
@@ -152,8 +153,9 @@ async function getClientLocal(identifier, userId) {
             if (request.result && request.result.user_id === userId) {
                 const client = request.result;
                 resolve({
-                    id: client.server_id || client.local_id,
-                    local_id: client.local_id,
+                    id: client.server_id || client.local_id, // Prefer server_id, fallback to local_id
+                    server_id: client.server_id || null, // Include server_id explicitly
+                    local_id: client.local_id, // Always include local_id for matching
                     name: client.name,
                     phone: client.phone || '',
                     sex: client.sex || '',
@@ -162,25 +164,30 @@ async function getClientLocal(identifier, userId) {
                 });
             } else {
                 // Try by server_id
-                const index = store.index('server_id');
-                const indexRequest = index.getAll(identifier);
-                indexRequest.onsuccess = () => {
-                    const client = indexRequest.result.find(c => c.user_id === userId);
-                    if (client) {
-                        resolve({
-                            id: client.server_id || client.local_id,
-                            local_id: client.local_id,
-                            name: client.name,
-                            phone: client.phone || '',
-                            sex: client.sex || '',
-                            createdAt: client.created_at,
-                            synced: client.synced
-                        });
-                    } else {
-                        resolve(null);
-                    }
-                };
-                indexRequest.onerror = () => reject(indexRequest.error);
+                if (store.indexNames.contains('server_id')) {
+                    const index = store.index('server_id');
+                    const indexRequest = index.getAll(identifier);
+                    indexRequest.onsuccess = () => {
+                        const client = indexRequest.result.find(c => c.user_id === userId);
+                        if (client) {
+                            resolve({
+                                id: client.server_id || client.local_id, // Prefer server_id, fallback to local_id
+                                server_id: client.server_id || null, // Include server_id explicitly
+                                local_id: client.local_id, // Always include local_id for matching
+                                name: client.name,
+                                phone: client.phone || '',
+                                sex: client.sex || '',
+                                createdAt: client.created_at,
+                                synced: client.synced
+                            });
+                        } else {
+                            resolve(null);
+                        }
+                    };
+                    indexRequest.onerror = () => reject(indexRequest.error);
+                } else {
+                    resolve(null);
+                }
             }
         };
         request.onerror = () => reject(request.error);
@@ -252,30 +259,51 @@ async function deleteClientLocal(localId, userId) {
 
 // Get unsynced clients
 async function getUnsyncedClients(userId) {
-    const db = await getDB();
-    const transaction = db.transaction([STORE_CLIENTS], 'readonly');
-    const store = transaction.objectStore(STORE_CLIENTS);
-    const index = store.index('user_id');
+    try {
+        const db = await getDB();
+        if (!db) {
+            console.warn('[IndexedDB] Database not initialized');
+            return [];
+        }
+        
+        const transaction = db.transaction([STORE_CLIENTS], 'readonly');
+        const store = transaction.objectStore(STORE_CLIENTS);
+        
+        // Guard: Check if index exists
+        if (!store.indexNames.contains('user_id')) {
+            console.warn('[IndexedDB] user_id index not found');
+            return [];
+        }
+        
+        const index = store.index('user_id');
 
-    return new Promise((resolve, reject) => {
-        // Get all clients for this user, then filter by synced === false
-        const request = index.getAll(userId);
-        request.onsuccess = () => {
-            const clients = request.result.filter(c => c.synced === false);
-            resolve(clients);
-        };
-        request.onerror = () => reject(request.error);
-    });
+        return new Promise((resolve, reject) => {
+            // Get all clients for this user, then filter by synced === false
+            const request = index.getAll(userId);
+            request.onsuccess = () => {
+                const clients = request.result.filter(c => c.synced === false);
+                resolve(clients);
+            };
+            request.onerror = () => {
+                console.warn('[IndexedDB] Error getting unsynced clients:', request.error);
+                resolve([]); // Return empty array instead of rejecting
+            };
+        });
+    } catch (err) {
+        console.warn('[IndexedDB] Error in getUnsyncedClients:', err);
+        return [];
+    }
 }
 
 // Mark client as synced
 async function markClientSynced(localId, serverId) {
     const db = await getDB();
-    const transaction = db.transaction([STORE_CLIENTS], 'readwrite');
-    const store = transaction.objectStore(STORE_CLIENTS);
+    const transaction = db.transaction([STORE_CLIENTS, STORE_MEASUREMENTS], 'readwrite');
+    const clientsStore = transaction.objectStore(STORE_CLIENTS);
+    const measurementsStore = transaction.objectStore(STORE_MEASUREMENTS);
 
     return new Promise((resolve, reject) => {
-        const getRequest = store.get(localId);
+        const getRequest = clientsStore.get(localId);
         getRequest.onsuccess = () => {
             const client = getRequest.result;
             if (!client) {
@@ -290,8 +318,94 @@ async function markClientSynced(localId, serverId) {
                 updated_at: new Date().toISOString()
             };
 
-            const putRequest = store.put(updated);
-            putRequest.onsuccess = () => resolve(updated);
+            const putRequest = clientsStore.put(updated);
+            putRequest.onsuccess = () => {
+                // CRITICAL: Update all measurements that reference this client's local_id
+                // Update their client_id to use server_id instead
+                try {
+                    // Check if client_id index exists
+                    if (measurementsStore.indexNames.contains('client_id')) {
+                        const measurementsIndex = measurementsStore.index('client_id');
+                        const measurementsRequest = measurementsIndex.getAll(localId);
+                        
+                        measurementsRequest.onsuccess = () => {
+                            const measurements = measurementsRequest.result;
+                            if (measurements.length > 0) {
+                                // Update each measurement's client_id to server_id
+                                let updateCount = 0;
+                                const total = measurements.length;
+                                
+                                if (total === 0) {
+                                    resolve(updated);
+                                    return;
+                                }
+                                
+                                measurements.forEach(measurement => {
+                                    const updatedMeasurement = {
+                                        ...measurement,
+                                        client_id: serverId, // Update to server_id
+                                        updated_at: new Date().toISOString()
+                                    };
+                                    const measurementPutRequest = measurementsStore.put(updatedMeasurement);
+                                    measurementPutRequest.onsuccess = () => {
+                                        updateCount++;
+                                        if (updateCount === total) {
+                                            resolve(updated);
+                                        }
+                                    };
+                                    measurementPutRequest.onerror = () => {
+                                        console.warn('[IndexedDB] Error updating measurement client_id:', measurementPutRequest.error);
+                                        updateCount++;
+                                        if (updateCount === total) {
+                                            resolve(updated);
+                                        }
+                                    };
+                                });
+                            } else {
+                                resolve(updated);
+                            }
+                        };
+                        measurementsRequest.onerror = () => {
+                            // If index query fails, still resolve (client is synced)
+                            console.warn('[IndexedDB] Error querying measurements:', measurementsRequest.error);
+                            resolve(updated);
+                        };
+                    } else {
+                        // No client_id index - scan all measurements (less efficient but works)
+                        const allMeasurementsRequest = measurementsStore.openCursor();
+                        let updateCount = 0;
+                        let totalToUpdate = 0;
+                        
+                        allMeasurementsRequest.onsuccess = (event) => {
+                            const cursor = event.target.result;
+                            if (cursor) {
+                                const measurement = cursor.value;
+                                if (measurement.client_id === localId) {
+                                    totalToUpdate++;
+                                    const updatedMeasurement = {
+                                        ...measurement,
+                                        client_id: serverId,
+                                        updated_at: new Date().toISOString()
+                                    };
+                                    cursor.update(updatedMeasurement);
+                                    updateCount++;
+                                }
+                                cursor.continue();
+                            } else {
+                                // Cursor finished
+                                resolve(updated);
+                            }
+                        };
+                        allMeasurementsRequest.onerror = () => {
+                            console.warn('[IndexedDB] Error scanning measurements:', allMeasurementsRequest.error);
+                            resolve(updated);
+                        };
+                    }
+                } catch (err) {
+                    console.warn('[IndexedDB] Error updating measurements:', err);
+                    resolve(updated); // Still resolve - client is synced
+                }
+            };
             putRequest.onerror = () => reject(putRequest.error);
         };
         getRequest.onerror = () => reject(getRequest.error);
@@ -498,20 +612,40 @@ async function deleteMeasurementLocal(localId, userId) {
 
 // Get unsynced measurements
 async function getUnsyncedMeasurements(userId) {
-    const db = await getDB();
-    const transaction = db.transaction([STORE_MEASUREMENTS], 'readonly');
-    const store = transaction.objectStore(STORE_MEASUREMENTS);
-    const index = store.index('user_id');
+    try {
+        const db = await getDB();
+        if (!db) {
+            console.warn('[IndexedDB] Database not initialized');
+            return [];
+        }
+        
+        const transaction = db.transaction([STORE_MEASUREMENTS], 'readonly');
+        const store = transaction.objectStore(STORE_MEASUREMENTS);
+        
+        // Guard: Check if index exists
+        if (!store.indexNames.contains('user_id')) {
+            console.warn('[IndexedDB] user_id index not found');
+            return [];
+        }
+        
+        const index = store.index('user_id');
 
-    return new Promise((resolve, reject) => {
-        // Get all measurements for this user, then filter by synced === false
-        const request = index.getAll(userId);
-        request.onsuccess = () => {
-            const measurements = request.result.filter(m => m.synced === false);
-            resolve(measurements);
-        };
-        request.onerror = () => reject(request.error);
-    });
+        return new Promise((resolve, reject) => {
+            // Get all measurements for this user, then filter by synced === false
+            const request = index.getAll(userId);
+            request.onsuccess = () => {
+                const measurements = request.result.filter(m => m.synced === false);
+                resolve(measurements);
+            };
+            request.onerror = () => {
+                console.warn('[IndexedDB] Error getting unsynced measurements:', request.error);
+                resolve([]); // Return empty array instead of rejecting
+            };
+        });
+    } catch (err) {
+        console.warn('[IndexedDB] Error in getUnsyncedMeasurements:', err);
+        return [];
+    }
 }
 
 // Mark measurement as synced

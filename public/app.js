@@ -307,11 +307,21 @@ function showLoadingScreen() {
 }
 
 function hideLoadingScreen() {
+    // Hide overlay loader
     const loader = document.getElementById('app-loader');
     if (loader) {
         loader.style.opacity = '0';
         loader.style.transition = 'opacity 0.3s';
         setTimeout(() => loader.remove(), 300);
+    }
+    // Hide static loading screen div
+    const loadingScreen = document.getElementById('app-loading-screen');
+    if (loadingScreen) {
+        loadingScreen.style.opacity = '0';
+        loadingScreen.style.transition = 'opacity 0.3s';
+        setTimeout(() => {
+            loadingScreen.style.display = 'none';
+        }, 300);
     }
     isHydrated = true;
 }
@@ -1559,6 +1569,13 @@ async function findOrCreateClient(name, phone, sex) {
             renderClientsList();
         }
         
+        // Re-render measurements in case any were showing "Loading..." for this client
+        if (typeof renderRecentMeasurements === 'function') {
+            setTimeout(() => {
+                renderRecentMeasurements(false).catch(() => {}); // Silent failure
+            }, 100);
+        }
+        
         return savedClient;
     } catch (err) {
         console.error('Error creating client locally:', err);
@@ -1822,7 +1839,7 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
             // Update UI immediately
             const currentScreen = document.querySelector('.screen.active');
             if (currentScreen?.id === 'home-screen') {
-                renderRecentMeasurements();
+                renderRecentMeasurements(false); // Don't reset pagination
             }
             
             return savedMeasurement;
@@ -2652,12 +2669,90 @@ function escapeHtml(text) {
 }
 
 // Get recent measurements (most recent first, with pagination)
-async function getRecentMeasurements(limit = null, offset = 0) {
-    const measurements = await getMeasurements();
+// Resolve client for measurement - handles both local_id and server_id mapping
+async function resolveClientForMeasurement(measurementClientId, userId) {
+    if (!measurementClientId) return null;
+    
     const clients = await getClients();
+    if (!Array.isArray(clients) || clients.length === 0) {
+        return null; // Clients not loaded yet
+    }
+    
+    // Try multiple matching strategies
+    let client = clients.find(c => {
+        // Strategy 1: Direct match by id (server_id or local_id)
+        if (c.id === measurementClientId) return true;
+        // Strategy 2: Match by server_id
+        if (c.server_id && c.server_id === measurementClientId) return true;
+        // Strategy 3: Match by local_id
+        if (c.local_id && c.local_id === measurementClientId) return true;
+        return false;
+    });
+    
+    if (client) {
+        return client;
+    }
+    
+    // If not found in clients array, try to resolve via IndexedDB (for offline-created data)
+    if (window.indexedDBHelper) {
+        try {
+            // Try to find client by local_id or server_id in IndexedDB
+            let dbClient = await window.indexedDBHelper.getClientLocal(measurementClientId, userId);
+            
+            // If not found by local_id, try by server_id
+            if (!dbClient) {
+                // Try to find by server_id (need to scan or use different approach)
+                const allClients = await window.indexedDBHelper.getClientsLocal(userId);
+                dbClient = allClients.find(c => c.server_id === measurementClientId || c.id === measurementClientId);
+            }
+            
+            if (dbClient) {
+                // Check if this client exists in our clients array with a different ID
+                const matchedClient = clients.find(c => {
+                    // Match by local_id
+                    if (c.local_id === dbClient.local_id) return true;
+                    // Match by server_id if client was synced
+                    if (dbClient.server_id && (c.server_id === dbClient.server_id || c.id === dbClient.server_id)) return true;
+                    // Match by name and phone (fallback for offline data)
+                    if (c.name === dbClient.name && c.phone === dbClient.phone) return true;
+                    return false;
+                });
+                if (matchedClient) {
+                    return matchedClient;
+                }
+                // Return the IndexedDB client formatted for display
+                return {
+                    id: dbClient.server_id || dbClient.local_id,
+                    server_id: dbClient.server_id || null,
+                    local_id: dbClient.local_id,
+                    name: dbClient.name,
+                    phone: dbClient.phone || '',
+                    sex: dbClient.sex || '',
+                    createdAt: dbClient.created_at,
+                    synced: dbClient.synced
+                };
+            }
+        } catch (err) {
+            console.warn('[Resolve] Error resolving client ID:', err);
+        }
+    }
+    
+    return null;
+}
+
+async function getRecentMeasurements(limit = null, offset = 0) {
+    const user = await getCurrentUser();
+    if (!user) return { measurements: [], total: 0, hasMore: false };
+    
+    // CRITICAL: Load clients FIRST, then measurements
+    const clients = await getClients();
+    const measurements = await getMeasurements();
     
     if (!Array.isArray(measurements)) return { measurements: [], total: 0, hasMore: false };
-    if (!Array.isArray(clients)) return { measurements: [], total: 0, hasMore: false };
+    if (!Array.isArray(clients)) {
+        // Clients not loaded yet - return empty with flag
+        return { measurements: [], total: 0, hasMore: false, clientsNotReady: true };
+    }
     
     // Sort by date, most recent first
     const sorted = measurements
@@ -2666,21 +2761,26 @@ async function getRecentMeasurements(limit = null, offset = 0) {
     // Apply pagination if limit is specified
     const paginated = limit ? sorted.slice(offset, offset + limit) : sorted.slice(offset);
     
-    // Map to include client info - handle temp clients gracefully
-    return {
-        measurements: paginated.map(measurement => {
-            // Try to find client - check both real and temp IDs
-            let client = clients.find(c => c.id === measurement.client_id);
+    // Map to include client info - resolve client IDs properly
+    const measurementsWithClients = await Promise.all(
+        paginated.map(async (measurement) => {
+            // Resolve client (handles local_id/server_id mapping)
+            const client = await resolveClientForMeasurement(measurement.client_id, user.id);
             
-            // If not found, show client name or "Unknown client"
-            const clientName = client ? client.name : 'Unknown client';
+            // If client not found, show placeholder (will re-render when clients load)
+            const clientName = client ? client.name : null; // null = not ready yet, not "Unknown"
             
             return {
                 ...measurement,
                 clientName: clientName,
-                clientId: measurement.client_id
+                clientId: measurement.client_id,
+                clientResolved: !!client
             };
-        }),
+        })
+    );
+    
+    return {
+        measurements: measurementsWithClients,
         total: sorted.length,
         hasMore: limit ? (offset + limit < sorted.length) : false
     };
@@ -2704,17 +2804,29 @@ async function renderRecentMeasurements(resetPagination = true) {
     // Use cache - don't force refresh (optimistic updates handle cache)
     const result = await getRecentMeasurements(limit, recentMeasurementsOffset);
     
+    // If clients not ready, show loading state
+    if (result.clientsNotReady) {
+        container.innerHTML = '<div class="recent-empty">Loading client data...</div>';
+        // Retry after a short delay
+        setTimeout(() => {
+            renderRecentMeasurements(resetPagination);
+        }, 500);
+        return;
+    }
+    
     if (result.measurements.length === 0) {
         container.innerHTML = '<div class="recent-empty">No measurements yet. Start by adding a new measurement.</div>';
         return;
     }
     
     let html = result.measurements.map(item => {
-        // Check if syncing (for visual feedback, but simplified in new design)
         // Determine if measurement is new (created within last 24 hours)
         const isNew = item.date_created && (new Date() - new Date(item.date_created)) < 24 * 60 * 60 * 1000;
         const badgeText = isNew ? 'New' : 'Updated';
         const badgeClass = isNew ? 'badge-new' : 'badge-updated';
+        
+        // Show placeholder if client not resolved yet (not "Unknown client")
+        const clientName = item.clientName || (item.clientResolved === false ? 'Loading...' : 'Loading...');
         
         return `
         <div class="recent-measurement-row" data-measurement-id="${item.id}" data-client-id="${item.clientId}">
@@ -2728,7 +2840,7 @@ async function renderRecentMeasurements(resetPagination = true) {
             </div>
         </div>
             <div class="recent-measurement-info">
-                <div class="recent-measurement-client">${escapeHtml(item.clientName || 'Unknown client')}</div>
+                <div class="recent-measurement-client">${escapeHtml(clientName)}</div>
                 <div class="recent-measurement-garment">${escapeHtml(item.garment_type || 'No garment type')}</div>
                 <div class="recent-measurement-date">${formatDateShort(item.date_created)}</div>
             </div>
@@ -2740,6 +2852,14 @@ async function renderRecentMeasurements(resetPagination = true) {
     }).join('');
     
     container.innerHTML = html;
+    
+    // If any clients were not resolved, retry rendering after a short delay
+    const unresolvedCount = result.measurements.filter(m => !m.clientResolved).length;
+    if (unresolvedCount > 0) {
+        setTimeout(() => {
+            renderRecentMeasurements(resetPagination);
+        }, 1000);
+    }
     
     // Update header control (See More / Collapse button)
     const controlContainer = document.getElementById('recent-measurements-control');
@@ -4145,7 +4265,12 @@ function setupAuthStateListener() {
         console.log('[Auth] State changed:', event, session?.user?.email || 'no user');
         
         if (event === 'SIGNED_OUT' || !session) {
-            // User signed out - ensure we're on login screen
+            // User signed out - hide all authenticated screens, show login
+            const allScreens = document.querySelectorAll('.screen');
+            allScreens.forEach(screen => {
+                screen.classList.remove('active');
+                screen.style.display = 'none';
+            });
             showScreen('login-screen');
             // Stop background sync
             if (window.syncManager) {
@@ -4153,7 +4278,20 @@ function setupAuthStateListener() {
             }
         } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
             // User signed in or token refreshed - restore app state
+            // CRITICAL: Do NOT show auth screens if user is authenticated
             if (session && session.user) {
+                // Hide auth screens immediately
+                const loginScreen = document.getElementById('login-screen');
+                const signupScreen = document.getElementById('signup-screen');
+                if (loginScreen) {
+                    loginScreen.classList.remove('active');
+                    loginScreen.style.display = 'none';
+                }
+                if (signupScreen) {
+                    signupScreen.classList.remove('active');
+                    signupScreen.style.display = 'none';
+                }
+                // Restore session and route correctly
                 restoreUserSession(session.user.id).catch(err => {
                     console.error('Error restoring user session:', err);
                 });
@@ -4166,6 +4304,18 @@ function setupAuthStateListener() {
 async function restoreUserSession(userId) {
     try {
         console.log('[Auth] Restoring session for user:', userId);
+        
+        // CRITICAL: Hide all auth screens first - authenticated users should NEVER see them
+        const loginScreen = document.getElementById('login-screen');
+        const signupScreen = document.getElementById('signup-screen');
+        if (loginScreen) {
+            loginScreen.classList.remove('active');
+            loginScreen.style.display = 'none';
+        }
+        if (signupScreen) {
+            signupScreen.classList.remove('active');
+            signupScreen.style.display = 'none';
+        }
         
         // Check if business exists for this user
         // Try cache first for offline support
@@ -4194,9 +4344,17 @@ async function restoreUserSession(userId) {
         
         if (!business) {
             console.log('[Auth] No business found, showing business setup');
+            // Show business setup - this is the ONLY time business-setup should appear for authenticated user
             showScreen('business-setup-screen');
         } else {
             console.log('[Auth] Business found, showing dashboard');
+            // Hide business setup screen if it was showing
+            const businessSetupScreen = document.getElementById('business-setup-screen');
+            if (businessSetupScreen) {
+                businessSetupScreen.classList.remove('active');
+                businessSetupScreen.style.display = 'none';
+            }
+            // Show dashboard
             showScreen('home-screen');
             
             // Update UI with business info
@@ -4215,15 +4373,29 @@ async function restoreUserSession(userId) {
         if (supabase) {
             const { data: { session } } = await supabase.auth.getSession();
             if (!session || !session.user) {
+                // Not authenticated - show login
                 showScreen('login-screen');
             } else {
                 // Has session but error fetching business - try cache
                 const cachedBusiness = getCachedBusiness();
                 if (cachedBusiness) {
+                    // Hide auth screens
+                    const loginScreen = document.getElementById('login-screen');
+                    const signupScreen = document.getElementById('signup-screen');
+                    if (loginScreen) {
+                        loginScreen.classList.remove('active');
+                        loginScreen.style.display = 'none';
+                    }
+                    if (signupScreen) {
+                        signupScreen.classList.remove('active');
+                        signupScreen.style.display = 'none';
+                    }
+                    // Show dashboard with cached business
                     showScreen('home-screen');
                     updateBusinessHeaderSync(cachedBusiness);
                     updateNavbarBusinessNameSync(cachedBusiness);
                 } else {
+                    // No cached business - show business setup (authenticated user needs to complete setup)
                     showScreen('business-setup-screen');
                 }
             }
@@ -4234,22 +4406,23 @@ async function restoreUserSession(userId) {
 }
 
 function initializeApp() {
-    console.log('Initializing app...');
+    console.log('[Init] Initializing app...');
     
-    // Ensure at least one screen is visible (default to login)
+    // CRITICAL: Hide ALL screens initially - only loading screen should be visible
     const allScreens = document.querySelectorAll('.screen');
-    if (allScreens.length > 0) {
-        // Check if any screen is already active
-        const hasActiveScreen = Array.from(allScreens).some(screen => screen.classList.contains('active'));
-        if (!hasActiveScreen) {
-            // No active screen - show login screen by default
-            const loginScreen = document.getElementById('login-screen');
-            if (loginScreen) {
-                loginScreen.classList.add('active');
-                console.log('No active screen found, showing login screen by default');
-            }
-        }
+    allScreens.forEach(screen => {
+        screen.classList.remove('active');
+        screen.style.display = 'none';
+    });
+    
+    // Hide loading screen div if it exists (show it via showLoadingScreen function)
+    const loadingScreen = document.getElementById('app-loading-screen');
+    if (loadingScreen) {
+        loadingScreen.style.display = 'flex';
     }
+    
+    // Show loading screen (overlay)
+    showLoadingScreen();
     
     // Hide all measurement fields on page load
     const allFields = ['shoulder', 'chest', 'waist', 'sleeve', 'length', 'neck', 'hip', 'inseam', 'thigh', 'seat'];
@@ -4263,16 +4436,10 @@ function initializeApp() {
         }
     });
     
-    // Setup authentication form handlers
+    // Setup authentication form handlers (but don't show screens yet)
     setupAuthForms();
     
-    // Show login screen immediately (before checking auth) to prevent blank screen
-    showScreen('login-screen');
-    
-    // Show loading screen
-    showLoadingScreen();
-    
-    // Wait for Supabase to be initialized, then check auth
+    // Wait for Supabase to be initialized, then check auth BEFORE showing any screen
     (async function() {
         try {
             console.log('[Init] Waiting for Supabase...');
@@ -4282,6 +4449,7 @@ function initializeApp() {
             if (!supabase) {
                 console.error('[Init] Supabase client failed to initialize');
                 hideLoadingScreen();
+                if (loadingScreen) loadingScreen.style.display = 'none';
                 showToast('Unable to connect to database. Please check your connection.', 'error', 5000);
                 showScreen('login-screen');
                 return;
@@ -4297,6 +4465,7 @@ function initializeApp() {
             if (sessionError) {
                 console.error('[Init] Session error:', sessionError);
                 hideLoadingScreen();
+                if (loadingScreen) loadingScreen.style.display = 'none';
                 showScreen('login-screen');
                 return;
             }
@@ -4304,19 +4473,25 @@ function initializeApp() {
             if (!session || !session.user) {
                 console.log('[Init] No active session, showing login screen');
                 hideLoadingScreen();
+                if (loadingScreen) loadingScreen.style.display = 'none';
                 showScreen('login-screen');
                 return;
             }
             
             console.log('[Init] User authenticated:', session.user.email);
             // User is authenticated - restore their session and route correctly
+            // Do NOT show login/business-setup screens - go straight to dashboard if authenticated
             await restoreUserSession(session.user.id);
+            
+            // Hide loading screen after routing is complete
             hideLoadingScreen();
+            if (loadingScreen) loadingScreen.style.display = 'none';
             
         } catch (err) {
             console.error('[Init] Error during app initialization:', err);
             hideLoadingScreen();
-            // Always show a screen - never leave blank
+            if (loadingScreen) loadingScreen.style.display = 'none';
+            // On error, show login screen
             showScreen('login-screen');
         } finally {
             // Setup all form listeners after screens are shown
@@ -4840,37 +5015,76 @@ async function getBusinessForUser(userId) {
     };
 }
 
-// Load user data (clients and measurements) - LOCAL-FIRST
+// Load user data (clients and measurements) - LOCAL-FIRST with strict load order
 async function loadUserData(userId) {
     try {
-        // Initialize IndexedDB
+        console.log('[LoadData] Starting data load for user:', userId);
+        
+        // Step 1: Initialize IndexedDB FIRST (required for all operations)
         if (window.indexedDBHelper) {
-            await window.indexedDBHelper.initDB();
+            try {
+                await window.indexedDBHelper.initDB();
+                console.log('[LoadData] IndexedDB initialized');
+            } catch (dbErr) {
+                console.error('[LoadData] IndexedDB initialization failed:', dbErr);
+                throw new Error('Failed to initialize local database');
+            }
+        } else {
+            console.warn('[LoadData] IndexedDB helper not available');
         }
         
-        // Load business
+        // Step 2: Load business (required for business_id)
         const business = await getBusinessForUser(userId);
         if (business) {
             updateBusinessHeaderSync(business);
             updateNavbarBusinessNameSync(business);
+            console.log('[LoadData] Business loaded:', business.name);
+        } else {
+            console.warn('[LoadData] No business found for user');
+            return; // Cannot proceed without business
         }
         
-        // Seed IndexedDB from Supabase on first load (one-time migration)
+        // Step 3: Seed IndexedDB from Supabase on first load (one-time migration)
+        // This must happen BEFORE loading clients/measurements
         await seedIndexedDBFromSupabase(userId);
+        console.log('[LoadData] IndexedDB seeding complete');
         
-        // Load clients and measurements from IndexedDB (local-first)
-        await getClients(true);
-        await getMeasurements(true);
+        // Step 4: Load clients FIRST (measurements depend on clients)
+        console.log('[LoadData] Loading clients...');
+        const clients = await getClients(true);
+        if (!Array.isArray(clients)) {
+            console.error('[LoadData] Failed to load clients');
+            return;
+        }
+        console.log('[LoadData] Clients loaded:', clients.length);
         
-        // Start background sync (silent)
-        if (window.syncManager) {
-            window.syncManager.startBackgroundSync();
+        // Step 5: Load measurements AFTER clients are loaded
+        console.log('[LoadData] Loading measurements...');
+        const measurements = await getMeasurements(true);
+        if (!Array.isArray(measurements)) {
+            console.error('[LoadData] Failed to load measurements');
+            return;
+        }
+        console.log('[LoadData] Measurements loaded:', measurements.length);
+        
+        // Step 6: Start background sync (silent) - only after data is loaded
+        if (window.syncManager && window.indexedDBHelper) {
+            // Ensure IndexedDB is ready before starting sync
+            try {
+                await window.indexedDBHelper.getDB(); // Verify DB is accessible
+                window.syncManager.startBackgroundSync();
+                console.log('[LoadData] Background sync started');
+            } catch (syncErr) {
+                console.warn('[LoadData] Sync not started - IndexedDB not ready:', syncErr);
+            }
         }
         
-        // Render recent measurements
+        // Step 7: Render recent measurements (clients are now loaded)
+        console.log('[LoadData] Rendering recent measurements...');
         renderRecentMeasurements();
+        console.log('[LoadData] Data load complete');
     } catch (err) {
-        console.error('Error loading user data:', err);
+        console.error('[LoadData] Error loading user data:', err);
     }
 }
 
@@ -4966,16 +5180,29 @@ async function getClients(forceRefresh = false) {
     
     // Initialize IndexedDB if needed
     if (!window.indexedDBHelper) {
-        await window.indexedDBHelper.initDB();
+        try {
+            await window.indexedDBHelper.initDB();
+        } catch (initErr) {
+            console.error('[GetClients] IndexedDB initialization failed:', initErr);
+            return [];
+        }
     }
     
     try {
         // Read from IndexedDB (local-first)
         const clients = await window.indexedDBHelper.getClientsLocal(user.id);
-        clientsCache = clients;
-        return clients || [];
+        
+        // Ensure all clients have both id (server_id or local_id) and local_id for matching
+        const normalizedClients = (clients || []).map(client => ({
+            ...client,
+            id: client.server_id || client.local_id, // Prefer server_id, fallback to local_id
+            local_id: client.local_id // Always include local_id for matching
+        }));
+        
+        clientsCache = normalizedClients;
+        return normalizedClients;
     } catch (err) {
-        console.error('Error fetching clients from IndexedDB:', err);
+        console.error('[GetClients] Error fetching clients from IndexedDB:', err);
         return [];
     }
 }

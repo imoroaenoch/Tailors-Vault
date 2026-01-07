@@ -83,8 +83,44 @@ export default function Home() {
 
   return (
     <>
+      {/* Loading Screen - Shows until auth resolves */}
+      <div id="app-loading-screen" style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'var(--bg-primary)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 9999,
+        fontFamily: 'inherit'
+      }}>
+        <div style={{
+          textAlign: 'center',
+          color: 'var(--text-primary)'
+        }}>
+          <div style={{
+            width: '40px',
+            height: '40px',
+            border: '3px solid var(--bg-card)',
+            borderTopColor: 'var(--accent-yellow)',
+            borderRadius: '50%',
+            animation: 'spin 0.8s linear infinite',
+            margin: '0 auto 16px'
+          }}></div>
+          <div>Loading...</div>
+        </div>
+      </div>
+      <style>{`
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
+      
       {/* Login Screen */}
-      <div id="login-screen" className="screen active auth-screen-wrapper">
+      <div id="login-screen" className="screen auth-screen-wrapper" style={{ display: 'none' }}>
         {/* Top Image Header Section - 30vh */}
         <div className="auth-header-image"></div>
         
@@ -187,7 +223,7 @@ export default function Home() {
       </div>
 
       {/* Sign Up Screen */}
-      <div id="signup-screen" className="screen auth-screen-wrapper">
+      <div id="signup-screen" className="screen auth-screen-wrapper" style={{ display: 'none' }}>
         {/* Top Image Header Section - 30vh */}
         <div className="auth-header-image"></div>
         
@@ -299,7 +335,7 @@ export default function Home() {
       </div>
 
       {/* Home Screen */}
-      <div id="home-screen" className="screen">
+      <div id="home-screen" className="screen" style={{ display: 'none' }}>
         <nav className="top-navbar">
           <div className="navbar-content">
             <h1 className="navbar-business-name" id="business-header-name">Measurement Vault</h1>
@@ -420,7 +456,7 @@ export default function Home() {
       </div>
 
       {/* Settings Screen */}
-      <div id="settings-screen" className="screen">
+      <div id="settings-screen" className="screen" style={{ display: 'none' }}>
         <nav className="top-navbar">
           <div className="navbar-content">
             <button id="back-from-settings-btn" className="navbar-back-btn" title="Back" aria-label="Back">

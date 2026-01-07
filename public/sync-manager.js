@@ -43,16 +43,23 @@ async function getBusinessForUser(userId) {
     return data;
 }
 
-// Resolve client ID (convert local_id to server_id if needed)
-async function resolveClientId(clientId, userId) {
-    // If it's a UUID format, it might be a local_id
-    const client = await window.indexedDBHelper.getClientLocal(clientId, userId);
-    if (client && client.local_id === clientId && client.id !== clientId) {
-        // This is a local_id, return the server_id
-        return client.id;
+// Resolve client ID for sync (convert local_id to server_id if needed)
+async function resolveClientIdForSync(clientId, userId) {
+    if (!window.indexedDBHelper) return clientId;
+    
+    try {
+        // If it's a UUID format, it might be a local_id
+        const client = await window.indexedDBHelper.getClientLocal(clientId, userId);
+        if (client && client.local_id === clientId && client.server_id && client.id !== clientId) {
+            // This is a local_id, return the server_id
+            return client.server_id || client.id;
+        }
+        // Otherwise, it's already a server_id or doesn't exist
+        return clientId;
+    } catch (err) {
+        console.warn('[Sync] Error resolving client ID:', err);
+        return clientId; // Return original ID on error
     }
-    // Otherwise, it's already a server_id or doesn't exist
-    return clientId;
 }
 
 // Sync a single client to Supabase
@@ -110,7 +117,7 @@ async function syncMeasurement(measurement, userId, businessId) {
 
     try {
         // Resolve client_id (convert local_id to server_id if needed)
-        const resolvedClientId = await resolveClientId(measurement.client_id, userId);
+        const resolvedClientId = await resolveClientIdForSync(measurement.client_id, userId);
         if (!resolvedClientId) {
             console.warn('[Sync] Cannot sync measurement: client not found');
             return false;
@@ -214,6 +221,20 @@ async function performSync() {
     if (isSyncing) return; // Prevent concurrent syncs
     if (!isOnline()) return;
 
+    // CRITICAL: Ensure IndexedDB is initialized before syncing
+    if (!window.indexedDBHelper) {
+        console.warn('[Sync] IndexedDB helper not available, skipping sync');
+        return;
+    }
+    
+    try {
+        // Verify IndexedDB is accessible
+        await window.indexedDBHelper.getDB();
+    } catch (dbErr) {
+        console.warn('[Sync] IndexedDB not ready, skipping sync:', dbErr);
+        return;
+    }
+
     const user = await getCurrentUser();
     if (!user) return;
 
@@ -228,6 +249,16 @@ async function performSync() {
         
         // Then sync measurements
         await syncMeasurements(user.id, business.id);
+        
+        // After sync, trigger re-render of measurements to update client names
+        if (typeof renderRecentMeasurements === 'function') {
+            // Small delay to ensure IndexedDB updates are reflected
+            setTimeout(() => {
+                renderRecentMeasurements().catch(err => {
+                    console.warn('[Sync] Error re-rendering measurements:', err);
+                });
+            }, 500);
+        }
     } catch (error) {
         console.warn('[Sync] Sync error:', error);
     } finally {
