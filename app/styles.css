@@ -64,7 +64,7 @@ body {
 .container {
     max-width: 500px;
     margin: 0 auto;
-    padding: 24px 20px;
+    padding: 24px 28px;
 }
 
 /* Compact screen padding (matching new-measurement-screen) */
@@ -251,7 +251,7 @@ body {
 /* Auth Tabs - Toggle between Login and Signup */
 .auth-tabs {
     display: flex;
-    background-color: var(--input-bg);
+    background-color: rgba(255, 255, 255, 0.1);
     border-radius: 12px;
     padding: 4px;
     margin-bottom: 24px;
@@ -259,7 +259,7 @@ body {
 }
 
 [data-theme="light"] .auth-tabs {
-    background-color: #f5f6f8;
+    background-color: rgba(245, 246, 248, 0.8);
 }
 
 .auth-tab {
@@ -274,21 +274,29 @@ body {
     cursor: pointer;
     transition: all 0.2s ease;
     font-family: inherit;
+    position: relative;
 }
 
 .auth-tab:hover {
     color: var(--text-primary);
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="light"] .auth-tab:hover {
+    background-color: rgba(255, 255, 255, 0.5);
 }
 
 .auth-tab.active {
     background-color: var(--bg-card);
     color: var(--text-primary);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    font-weight: 600;
 }
 
 [data-theme="light"] .auth-tab.active {
     background-color: #ffffff;
-    box-shadow: 0 2px 8px rgba(26, 43, 93, 0.1);
+    box-shadow: 0 2px 8px rgba(26, 43, 93, 0.15);
+    color: var(--text-primary);
 }
 
 /* Auth Form Wrapper */
@@ -1112,6 +1120,13 @@ textarea {
     appearance: none;
     color: var(--text-primary);
     line-height: 1.5;
+    box-sizing: border-box;
+}
+
+/* Ensure email fields match password fields exactly */
+input[type="email"] {
+    padding: 11px 14px;
+    font-size: 15px;
 }
 
 input[type="text"]:focus,
@@ -1249,7 +1264,7 @@ textarea {
     }
     
     .container {
-        padding: 10px 14px;
+        padding: 10px 20px;
     }
     
     .screen-header {

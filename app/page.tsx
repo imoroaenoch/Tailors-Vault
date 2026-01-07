@@ -51,6 +51,19 @@ export default function Home() {
       } else if ((window as any).supabaseClient) {
         console.log('Supabase client already initialized')
       }
+
+      // Register Service Worker for PWA
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/service-worker.js')
+            .then((registration) => {
+              console.log('[PWA] Service Worker registered successfully:', registration.scope)
+            })
+            .catch((error) => {
+              console.warn('[PWA] Service Worker registration failed:', error)
+            })
+        })
+      }
     }
   }, [])
 
@@ -1171,6 +1184,8 @@ export default function Home() {
         </div>
       </div>
 
+      <Script src="/indexeddb.js" strategy="beforeInteractive" />
+      <Script src="/sync-manager.js" strategy="beforeInteractive" />
       <Script src="/app.js" strategy="afterInteractive" />
       
       {/* Mobile Footer Navigation */}
