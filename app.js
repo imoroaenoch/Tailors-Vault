@@ -11,6 +11,9 @@ const LOGOUT_STATE_KEY = 'measurement_vault_logged_out';
 // Current business session ID key
 const CURRENT_BUSINESS_ID_KEY = 'measurement_vault_current_business_id';
 
+// Device ID key (unique per device, never changes)
+const DEVICE_ID_KEY = 'measurement_vault_device_id';
+
 // Garment Types by Sex (including Custom option)
 const GARMENT_TYPES = {
     Male: [
@@ -74,34 +77,51 @@ function getSupabase() {
     return null;
 }
 
-// Check if business exists
+// Check if business exists for current device
 async function hasBusiness() {
+    // First check logout state - if logged out, no business
+    if (isUserLoggedOut()) {
+        return false;
+    }
+    
     const supabase = getSupabase();
     if (!supabase) return false;
     
+    const deviceId = getDeviceId();
+    
+    // Only check for business linked to this device
     const { data, error } = await supabase
         .from('businesses')
         .select('id')
+        .eq('device_id', deviceId)
         .limit(1)
         .single();
     
     return !error && data && data.id;
 }
 
-// Get business
+// Get business (only for current device)
 async function getBusiness() {
+    // If logged out, never return a business
+    if (isUserLoggedOut()) {
+        return null;
+    }
+    
     const supabase = getSupabase();
     if (!supabase) return null;
+    
+    const deviceId = getDeviceId();
     
     // First, check if we have a stored business ID in session
     const storedBusinessId = localStorage.getItem(CURRENT_BUSINESS_ID_KEY);
     
     if (storedBusinessId) {
-        // Fetch the specific business by ID
+        // Fetch the specific business by ID and verify it belongs to this device
         const { data, error } = await supabase
             .from('businesses')
             .select('*')
             .eq('id', storedBusinessId)
+            .eq('device_id', deviceId)
             .single();
         
         if (!error && data) {
@@ -114,14 +134,15 @@ async function getBusiness() {
                 createdAt: data.created_at
             };
         }
-        // If stored ID is invalid, clear it and fall through to default behavior
+        // If stored ID is invalid or doesn't belong to this device, clear it
         localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
     }
     
-    // Fallback: get first business (for backward compatibility)
+    // Get business linked to this device (no fallback to other businesses)
     const { data, error } = await supabase
         .from('businesses')
         .select('*')
+        .eq('device_id', deviceId)
         .limit(1)
         .single();
     
@@ -136,6 +157,7 @@ async function getBusiness() {
         name: data.name,
         email: data.email,
         phone: data.phone,
+        email_verified: data.email_verified || false,
         createdAt: data.created_at
     };
 }
@@ -154,6 +176,16 @@ function generateUUID() {
     });
 }
 
+// Get or create device ID (unique per device, never changes)
+function getDeviceId() {
+    let deviceId = localStorage.getItem(DEVICE_ID_KEY);
+    if (!deviceId) {
+        deviceId = generateUUID();
+        localStorage.setItem(DEVICE_ID_KEY, deviceId);
+    }
+    return deviceId;
+}
+
 // Create business and initialize data structure
 async function createBusiness(name, email, phone) {
     const supabase = getSupabase();
@@ -163,10 +195,28 @@ async function createBusiness(name, email, phone) {
     }
     
     try {
+        // Get device ID and link business to this device
+        const deviceId = getDeviceId();
+        
         // Let Supabase generate the ID automatically (no manual ID assignment)
+        // Email is optional - use null if empty
+        const businessData = {
+            name: name.trim(),
+            phone: phone.trim(),
+            device_id: deviceId
+        };
+        
+        // Only include email if provided
+        const emailTrimmed = email.trim();
+        if (emailTrimmed) {
+            businessData.email = emailTrimmed;
+        } else {
+            businessData.email = null;
+        }
+        
         const { data, error } = await supabase
             .from('businesses')
-            .insert([{ name: name.trim(), email: email.trim(), phone: phone.trim() }])
+            .insert([businessData])
             .select()
             .single();
         
@@ -207,13 +257,22 @@ async function updateBusiness(name, email, phone) {
     const currentBusiness = await getBusiness();
     if (!currentBusiness) return null;
     
+    // Email is optional - use null if empty
+    const updateData = {
+        name: name.trim(),
+        phone: phone.trim()
+    };
+    
+    const emailTrimmed = email.trim();
+    if (emailTrimmed) {
+        updateData.email = emailTrimmed;
+    } else {
+        updateData.email = null;
+    }
+    
     const { data, error } = await supabase
         .from('businesses')
-        .update({
-            name: name.trim(),
-            email: email.trim(),
-            phone: phone.trim()
-        })
+        .update(updateData)
         .eq('id', currentBusiness.id)
         .select()
         .single();
@@ -229,36 +288,60 @@ async function updateBusiness(name, email, phone) {
         name: data.name,
         email: data.email,
         phone: data.phone,
+        email_verified: data.email_verified || false,
         createdAt: data.created_at
     };
 }
 
+// ========== EMAIL LINKING FUNCTIONS ==========
+// (Copy all email linking functions from public/app.js)
+// These functions are defined in public/app.js and will be used by both files
+
 // Check if business credentials match (for login)
+// Check if business credentials match (for login)
+// Email is optional - only match if both are provided or both are empty/null
 async function matchBusiness(name, email, phone) {
     const business = await getBusiness();
     if (!business) return false;
     
-    return (
-        business.name.toLowerCase().trim() === name.toLowerCase().trim() &&
-        business.email.toLowerCase().trim() === email.toLowerCase().trim() &&
-        business.phone.trim() === phone.trim()
-    );
+    // Name and phone must match
+    const nameMatch = business.name.toLowerCase().trim() === name.toLowerCase().trim();
+    const phoneMatch = business.phone.trim() === phone.trim();
+    
+    // Email matching: if email is provided, it must match; if not provided, business email can be null/empty
+    const emailTrimmed = email.trim();
+    const businessEmail = business.email ? business.email.toLowerCase().trim() : '';
+    const emailMatch = emailTrimmed ? (businessEmail === emailTrimmed.toLowerCase()) : (!businessEmail);
+    
+    return nameMatch && phoneMatch && emailMatch;
 }
 
-// Find business by credentials (for login)
+// Find business by credentials (for login) - only for current device
 async function findBusinessByCredentials(name, email, phone) {
     const supabase = getSupabase();
     if (!supabase) return null;
     
+    const deviceId = getDeviceId();
+    
     try {
-        // Search for business matching all three credentials
-        const { data, error } = await supabase
+        // Build query - email is optional
+        let query = supabase
             .from('businesses')
             .select('*')
             .eq('name', name.trim())
-            .eq('email', email.trim().toLowerCase())
             .eq('phone', phone.trim())
-            .limit(1);
+            .eq('device_id', deviceId);
+        
+        // Only match email if provided
+        const emailTrimmed = email.trim();
+        if (emailTrimmed) {
+            query = query.eq('email', emailTrimmed.toLowerCase());
+        } else {
+            // If no email provided, match businesses with null or empty email
+            query = query.or('email.is.null,email.eq.');
+        }
+        
+        const { data, error } = await query.limit(1);
         
         // Check if we got results and no error
         if (error || !data || data.length === 0) {
@@ -2254,15 +2337,12 @@ document.getElementById('business-setup-form').addEventListener('submit', async 
         return;
     }
     
-    if (!email) {
-        alert('Business email is required');
-        return;
-    }
-    
     if (!phone) {
         alert('Business phone is required');
         return;
     }
+    
+    // Email is optional - no validation needed
     
     // Clear any existing business session before starting registration
     // This ensures old businesses don't override new registrations
@@ -2270,7 +2350,8 @@ document.getElementById('business-setup-form').addEventListener('submit', async 
     localStorage.removeItem(LOGOUT_STATE_KEY);
     
     // First, check if a business with these credentials already exists
-    const existingBusiness = await findBusinessByCredentials(name, email, phone);
+    // Pass empty string if email is not provided
+    const existingBusiness = await findBusinessByCredentials(name, email || '', phone);
     
     if (existingBusiness) {
         // Business exists - ID is already stored in findBusinessByCredentials
@@ -2317,13 +2398,18 @@ async function handleSettingsClick() {
             </div>
             <div class="business-info-item">
                 <span class="business-info-label">Email:</span>
-                <span>${escapeHtml(business.email)}</span>
+                <span>${escapeHtml(business.email || 'Not set')}</span>
             </div>
             <div class="business-info-item">
                 <span class="business-info-label">Phone:</span>
                 <span>${escapeHtml(business.phone)}</span>
             </div>
         `;
+    }
+    
+    // Render email linking status (function defined in public/app.js)
+    if (typeof renderEmailLinkingStatus === 'function') {
+        await renderEmailLinkingStatus();
     }
     
     showScreen('settings-screen');
@@ -2378,15 +2464,12 @@ document.getElementById('edit-business-form').addEventListener('submit', async (
         return;
     }
     
-    if (!email) {
-        alert('Business email is required');
-        return;
-    }
-    
     if (!phone) {
         alert('Business phone is required');
         return;
     }
+    
+    // Email is optional - no validation needed
     
     await updateBusiness(name, email, phone);
     
@@ -2434,13 +2517,14 @@ document.getElementById('business-login-form').addEventListener('submit', async 
     const email = document.getElementById('login-business-email').value.trim();
     const phone = document.getElementById('login-business-phone').value.trim();
     
-    if (!name || !email || !phone) {
-        alert('Please enter all business details');
+    if (!name || !phone) {
+        alert('Business name and phone are required');
         return;
     }
     
+    // Email is optional - pass empty string if not provided
     // Check if credentials match
-    if (await matchBusiness(name, email, phone)) {
+    if (await matchBusiness(name, email || '', phone)) {
         loginBusiness();
         await updateBusinessHeader();
         showScreen('home-screen');
@@ -2603,6 +2687,9 @@ function addCustomFieldRow(fieldName = '', fieldValue = '') {
 
 // Initialize app
 function initializeApp() {
+    // Initialize device ID early (must happen before any business checks)
+    getDeviceId();
+    
     // Hide all measurement fields on page load
     const allFields = ['shoulder', 'chest', 'waist', 'sleeve', 'length', 'neck', 'hip', 'inseam', 'thigh', 'seat'];
     allFields.forEach(field => {

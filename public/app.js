@@ -38,6 +38,12 @@ let pendingMeasurementsRetryInterval = null; // Interval for retrying pending me
 let appReady = false;
 let isHydrated = false;
 
+// Performance: Cache DOM elements
+let cachedScreens = null;
+let businessDataCache = null;
+let businessDataCacheTime = 0;
+const BUSINESS_CACHE_DURATION = 30000; // 30 seconds
+
 // ========== LOCALSTORAGE CACHE FUNCTIONS ==========
 // Safe JSON parsing with fallback
 function safeJsonParse(jsonString, fallback = null) {
@@ -473,7 +479,12 @@ async function hasBusiness() {
 }
 
 // Get business for current authenticated user (single source of truth)
-async function getBusiness() {
+async function getBusiness(useCache = true) {
+    // Check cache first
+    if (useCache && businessDataCache && (Date.now() - businessDataCacheTime) < BUSINESS_CACHE_DURATION) {
+        return businessDataCache;
+    }
+    
     const user = await getCurrentUser();
     if (!user) {
         return null;
@@ -497,13 +508,25 @@ async function getBusiness() {
     }
     
     // Return business data
-    return {
+    const business = {
         id: data.id,
         name: data.name,
         email: data.email || null,
         phone: data.phone,
         createdAt: data.created_at
     };
+    
+    // Cache the result
+    businessDataCache = business;
+    businessDataCacheTime = Date.now();
+    
+    return business;
+}
+
+// Clear business cache (call after updates)
+function clearBusinessCache() {
+    businessDataCache = null;
+    businessDataCacheTime = 0;
 }
 
 // Check if an ID is a temporary ID (starts with "temp_")
@@ -555,9 +578,9 @@ function generateUUID() {
 // This function is kept for backward compatibility but should not be used
 async function createBusiness(name, email, phone) {
     console.warn('createBusiness() is deprecated - business creation is handled in business setup form');
-    return null;
-}
-
+        return null;
+    }
+    
 // Update business details
 async function updateBusiness(name, email, phone) {
     const supabase = getSupabase();
@@ -580,27 +603,30 @@ async function updateBusiness(name, email, phone) {
         updateData.email = null;
     }
     
-    const { data, error } = await supabase
-        .from('businesses')
+        const { data, error } = await supabase
+            .from('businesses')
         .update(updateData)
         .eq('id', currentBusiness.id)
-        .select()
-        .single();
-    
-    if (error) {
+            .select()
+            .single();
+        
+        if (error) {
         console.error('Error updating business:', error);
-        return null;
-    }
-    
-    // Convert to match old format
-    return {
-        id: data.id,
-        name: data.name,
-        email: data.email,
-        phone: data.phone,
+            return null;
+        }
+        
+        // Clear cache after update
+        clearBusinessCache();
+        
+        // Convert to match old format
+        return {
+            id: data.id,
+            name: data.name,
+            email: data.email,
+            phone: data.phone,
         email_verified: data.email_verified || false,
-        createdAt: data.created_at
-    };
+            createdAt: data.created_at
+        };
 }
 
 // ========== EMAIL LINKING FUNCTIONS ==========
@@ -743,8 +769,8 @@ async function linkEmailToBusiness(email) {
         
         // Update current business with verified email (email becomes primary identifier)
         const { error } = await supabase
-            .from('businesses')
-            .update({
+        .from('businesses')
+        .update({
                 email: email.trim().toLowerCase(),
                 email_verified: isEmailVerified, // Use real Supabase Auth verification status
                 // Clear old token fields if they exist (backward compatibility)
@@ -907,9 +933,9 @@ async function syncDataFromEmail(email) {
                             phone: sourceClient.phone,
                             sex: sourceClient.sex
                         }])
-                        .select()
-                        .single();
-                    
+        .select()
+        .single();
+    
                     if (newClient) {
                         clientIdMap.set(sourceClient.id, newClient.id);
                     }
@@ -1136,6 +1162,9 @@ async function logoutBusiness() {
         await supabase.auth.signOut();
     }
     
+    // Clear business cache
+    clearBusinessCache();
+    
     // Clear all localStorage
     localStorage.clear();
     
@@ -1148,6 +1177,9 @@ async function logoutBusiness() {
     
     // Clear cache
     clearCache();
+    
+    // Clear DOM caches
+    cachedScreens = null;
     
     // Reset all in-memory variables
     currentClientId = null;
@@ -1373,29 +1405,29 @@ async function updateClient(clientId, name, phone, sex) {
         }
     
         try {
-            const { data, error } = await supabase
-                .from('clients')
-                .update({
-                    name: name.trim(),
-                    phone: phone ? phone.trim() : null,
-                    sex: sex || null
-                })
-                .eq('id', clientId)
-                .select()
-                .single();
+    const { data, error } = await supabase
+        .from('clients')
+        .update({
+            name: name.trim(),
+            phone: phone ? phone.trim() : null,
+            sex: sex || null
+        })
+        .eq('id', clientId)
+        .select()
+        .single();
     
-            if (error) {
+    if (error) {
                 throw error;
-            }
+    }
     
             // Update cache with real data
             if (data && cachedClient) {
                 updateClientInCache(clientId, {
-                    id: data.id,
-                    name: data.name,
-                    phone: data.phone || '',
-                    sex: data.sex || '',
-                    createdAt: data.created_at
+        id: data.id,
+        name: data.name,
+        phone: data.phone || '',
+        sex: data.sex || '',
+        createdAt: data.created_at
                 });
             }
         } catch (err) {
@@ -1436,17 +1468,17 @@ async function deleteClient(clientId) {
     }
     
     try {
-        // Delete measurements first (cascade should handle this, but being explicit)
-        await supabase
-            .from('measurements')
-            .delete()
+    // Delete measurements first (cascade should handle this, but being explicit)
+    await supabase
+        .from('measurements')
+        .delete()
             .eq('client_id', clientId)
             .eq('user_id', user.id); // Ensure user owns these measurements
     
-        // Delete client
+    // Delete client
         const { error } = await supabase
-            .from('clients')
-            .delete()
+        .from('clients')
+        .delete()
             .eq('id', clientId)
             .eq('user_id', user.id); // Ensure user owns this client
             
@@ -1562,29 +1594,29 @@ async function findOrCreateClient(name, phone, sex) {
             throw new Error('Please create a business first before adding clients.');
         }
         
-        const { data: newClient, error: insertError } = await supabase
-            .from('clients')
-            .insert([{
+    const { data: newClient, error: insertError } = await supabase
+        .from('clients')
+        .insert([{
                 user_id: user.id,
                 business_id: business.id, // Required by database schema
-                name: name.trim(),
-                phone: phoneNormalized || null,
-                sex: sex || null
-            }])
-            .select()
-            .single();
-        
-        if (insertError) {
+            name: name.trim(),
+            phone: phoneNormalized || null,
+            sex: sex || null
+        }])
+        .select()
+        .single();
+    
+    if (insertError) {
             throw insertError;
-        }
-        
+    }
+    
         const client = {
-            id: newClient.id,
-            name: newClient.name,
-            phone: newClient.phone || '',
-            sex: newClient.sex || '',
-            createdAt: newClient.created_at
-        };
+        id: newClient.id,
+        name: newClient.name,
+        phone: newClient.phone || '',
+        sex: newClient.sex || '',
+        createdAt: newClient.created_at
+    };
         
         // Add to cache
         addClientToCache(client);
@@ -1778,17 +1810,17 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
         // Get current measurement from cache
         const cachedMeasurement = measurementsCache?.find(m => m.id === measurementId);
         const optimisticUpdate = {
-            garment_type: formData.garmentType || null,
-            shoulder: formData.shoulder || null,
-            chest: formData.chest || null,
-            waist: formData.waist || null,
-            sleeve: formData.sleeve || null,
-            length: formData.length || null,
-            neck: formData.neck || null,
-            hip: formData.hip || null,
-            inseam: formData.inseam || null,
-            thigh: formData.thigh || null,
-            seat: formData.seat || null,
+                garment_type: formData.garmentType || null,
+                shoulder: formData.shoulder || null,
+                chest: formData.chest || null,
+                waist: formData.waist || null,
+                sleeve: formData.sleeve || null,
+                length: formData.length || null,
+                neck: formData.neck || null,
+                hip: formData.hip || null,
+                inseam: formData.inseam || null,
+                thigh: formData.thigh || null,
+                seat: formData.seat || null,
             notes: formData.notes || null,
             customFields: formData.customFields || {}
         };
@@ -1814,37 +1846,37 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
                     inseam: formData.inseam ? parseFloat(formData.inseam) : null,
                     thigh: formData.thigh ? parseFloat(formData.thigh) : null,
                     seat: formData.seat ? parseFloat(formData.seat) : null,
-                    notes: formData.notes || null,
-                    custom_fields: formData.customFields || {}
-                })
-                .eq('id', measurementId)
+                notes: formData.notes || null,
+                custom_fields: formData.customFields || {}
+            })
+            .eq('id', measurementId)
                 .eq('user_id', user.id) // Ensure user owns this measurement
-                .select()
-                .single();
-    
-            if (error) {
+            .select()
+            .single();
+        
+        if (error) {
                 throw error;
-            }
-    
+        }
+        
             // Update cache with real data from Supabase
             const measurement = {
-                id: data.id,
-                client_id: data.client_id,
-                garment_type: data.garment_type || null,
-                date_created: data.created_at,
-                shoulder: data.shoulder || null,
-                chest: data.chest || null,
-                waist: data.waist || null,
-                sleeve: data.sleeve || null,
-                length: data.length || null,
-                neck: data.neck || null,
-                hip: data.hip || null,
-                inseam: data.inseam || null,
-                thigh: data.thigh || null,
-                seat: data.seat || null,
-                notes: data.notes || null,
-                customFields: data.custom_fields || {}
-            };
+            id: data.id,
+            client_id: data.client_id,
+            garment_type: data.garment_type || null,
+            date_created: data.created_at,
+            shoulder: data.shoulder || null,
+            chest: data.chest || null,
+            waist: data.waist || null,
+            sleeve: data.sleeve || null,
+            length: data.length || null,
+            neck: data.neck || null,
+            hip: data.hip || null,
+            inseam: data.inseam || null,
+            thigh: data.thigh || null,
+            seat: data.seat || null,
+            notes: data.notes || null,
+            customFields: data.custom_fields || {}
+        };
             
             updateMeasurementInCache(measurementId, measurement);
             
@@ -1905,34 +1937,34 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
                 insertData.custom_fields = formData.customFields;
             }
             
-            const { data, error } = await supabase
-                .from('measurements')
+        const { data, error } = await supabase
+            .from('measurements')
                 .insert([insertData])
-                .select()
-                .single();
-            
-            if (error) {
+            .select()
+            .single();
+        
+        if (error) {
                 throw error;
-            }
-            
+        }
+        
             const measurement = {
-                id: data.id,
-                client_id: data.client_id,
-                garment_type: data.garment_type || null,
-                date_created: data.created_at,
-                shoulder: data.shoulder || null,
-                chest: data.chest || null,
-                waist: data.waist || null,
-                sleeve: data.sleeve || null,
-                length: data.length || null,
-                neck: data.neck || null,
-                hip: data.hip || null,
-                inseam: data.inseam || null,
-                thigh: data.thigh || null,
-                seat: data.seat || null,
-                notes: data.notes || null,
-                customFields: data.custom_fields || {}
-            };
+            id: data.id,
+            client_id: data.client_id,
+            garment_type: data.garment_type || null,
+            date_created: data.created_at,
+            shoulder: data.shoulder || null,
+            chest: data.chest || null,
+            waist: data.waist || null,
+            sleeve: data.sleeve || null,
+            length: data.length || null,
+            neck: data.neck || null,
+            hip: data.hip || null,
+            inseam: data.inseam || null,
+            thigh: data.thigh || null,
+            seat: data.seat || null,
+            notes: data.notes || null,
+            customFields: data.custom_fields || {}
+        };
             
             // Add to cache
             addMeasurementToCache(measurement);
@@ -2123,50 +2155,59 @@ function updateNavbarBusinessNameSync(business) {
     });
 }
 
-// Screen Navigation
+// Screen Navigation (Optimized)
 function showScreen(screenId) {
     try {
-        // Hide all screens
-        document.querySelectorAll('.screen').forEach(screen => {
-            screen.classList.remove('active');
-            // Remove any inline display styles that might override CSS
-            screen.style.display = '';
+        // Cache screens on first use
+        if (!cachedScreens) {
+            cachedScreens = Array.from(document.querySelectorAll('.screen'));
+        }
+        
+        // Use requestAnimationFrame for smooth transitions
+        requestAnimationFrame(() => {
+            // Hide all screens (batch DOM updates)
+            cachedScreens.forEach(screen => {
+                screen.classList.remove('active');
+                screen.style.display = '';
+            });
+            
+            // Show the requested screen
+            const targetScreen = document.getElementById(screenId);
+            if (!targetScreen) {
+                console.error(`Screen not found: ${screenId}`);
+                // Fallback to login screen if screen doesn't exist
+                const loginScreen = document.getElementById('login-screen');
+                if (loginScreen) {
+                    loginScreen.classList.add('active');
+                    loginScreen.style.display = '';
+                } else {
+                    console.error('Login screen also not found!');
+                }
+                return;
+            }
+            
+            targetScreen.classList.add('active');
+            targetScreen.style.display = '';
+            
+            // Defer heavy operations to next frame for instant screen switch
+            requestAnimationFrame(() => {
+                // Update business header when showing home screen (deferred)
+                if (screenId === 'home-screen') {
+                    try {
+                        updateBusinessHeader();
+                    } catch (err) {
+                        console.warn('Error updating business header:', err);
+                    }
+                }
+                
+                // Update business name in all navbar instances (deferred)
+                try {
+                    updateNavbarBusinessName();
+                } catch (err) {
+                    console.warn('Error updating navbar business name:', err);
+                }
+            });
         });
-        
-        // Show the requested screen
-        const targetScreen = document.getElementById(screenId);
-        if (!targetScreen) {
-            console.error(`Screen not found: ${screenId}`);
-            // Fallback to login screen if screen doesn't exist
-            const loginScreen = document.getElementById('login-screen');
-            if (loginScreen) {
-                loginScreen.classList.add('active');
-                loginScreen.style.display = '';
-            } else {
-                console.error('Login screen also not found!');
-            }
-            return;
-        }
-        
-        targetScreen.classList.add('active');
-        // Ensure no inline display style is blocking it
-        targetScreen.style.display = '';
-        
-        // Update business header when showing home screen
-        if (screenId === 'home-screen') {
-            try {
-                updateBusinessHeader();
-            } catch (err) {
-                console.warn('Error updating business header:', err);
-            }
-        }
-        
-        // Update business name in all navbar instances
-        try {
-            updateNavbarBusinessName();
-        } catch (err) {
-            console.warn('Error updating navbar business name:', err);
-        }
     } catch (err) {
         console.error('Error in showScreen:', err);
         // Try to show login screen as fallback
@@ -2179,23 +2220,44 @@ function showScreen(screenId) {
 
 // Navigation Event Listeners
 document.getElementById('new-measurement-btn').addEventListener('click', () => {
-    resetMeasurementForm();
-    document.querySelector('#new-measurement-screen h2').textContent = 'New Measurement';
+    // Show screen immediately
     showScreen('new-measurement-screen');
-    document.getElementById('client-name').focus();
+    
+    // Defer heavy operations
+    requestAnimationFrame(() => {
+        resetMeasurementForm();
+        const h2 = document.querySelector('#new-measurement-screen h2');
+        if (h2) h2.textContent = 'New Measurement';
+        const clientNameInput = document.getElementById('client-name');
+        if (clientNameInput) clientNameInput.focus();
+    });
 });
 
 document.getElementById('search-measurements-btn').addEventListener('click', () => {
+    // Show screen immediately
     showScreen('search-screen');
-    document.getElementById('search-input').focus();
-    renderSearchResults('');
+    
+    // Defer operations
+    requestAnimationFrame(() => {
+        const searchInput = document.getElementById('search-input');
+        if (searchInput) {
+            searchInput.focus();
+            renderSearchResults('');
+        }
+    });
 });
 
 
 document.getElementById('back-from-search-btn').addEventListener('click', () => {
+    // Show screen immediately
     showScreen('home-screen');
-    document.getElementById('search-input').value = '';
-    renderRecentMeasurements();
+    
+    // Defer operations
+    requestAnimationFrame(() => {
+        const searchInput = document.getElementById('search-input');
+        if (searchInput) searchInput.value = '';
+        renderRecentMeasurements();
+    });
 });
 
 // Track previous screen for back navigation
@@ -2207,8 +2269,13 @@ document.getElementById('back-from-details-btn').addEventListener('click', () =>
 
 // Clients Screen Navigation
 document.getElementById('clients-btn').addEventListener('click', async () => {
+    // Show screen immediately
     showScreen('clients-screen');
-    await renderClientsList();
+    
+    // Load data asynchronously after screen is shown
+    requestAnimationFrame(async () => {
+        await renderClientsList();
+    });
 });
 
 document.getElementById('back-from-clients-btn').addEventListener('click', () => {
@@ -2805,8 +2872,8 @@ async function renderRecentMeasurements(resetPagination = true) {
                         <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
                         <line x1="12" y1="22.08" x2="12" y2="12"></line>
                     </svg>
-                </div>
             </div>
+        </div>
             <div class="recent-measurement-info">
                 <div class="recent-measurement-client">${escapeHtml(item.clientName || 'Unknown client')}</div>
                 <div class="recent-measurement-garment">${escapeHtml(item.garment_type || 'No garment type')}</div>
@@ -2898,8 +2965,8 @@ async function renderRecentMeasurements(resetPagination = true) {
                                     <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
                                     <line x1="12" y1="22.08" x2="12" y2="12"></line>
                                 </svg>
-                            </div>
                         </div>
+                    </div>
                         <div class="recent-measurement-info">
                             <div class="recent-measurement-client">${escapeHtml(item.clientName || 'Unknown client')}</div>
                             <div class="recent-measurement-garment">${escapeHtml(item.garment_type || 'No garment type')}</div>
@@ -3560,10 +3627,13 @@ function setupBusinessFormListener() {
                 
                 console.log('Business created successfully');
                 
-                // Update header and show home screen
+                // Clear cache after creation
+                clearBusinessCache();
+    
+    // Update header and show home screen
                 updateBusinessHeaderSync(business);
                 updateNavbarBusinessNameSync(business);
-                showScreen('home-screen');
+    showScreen('home-screen');
                 await loadUserData(user.id);
                 
                 // Re-enable button
@@ -3594,34 +3664,42 @@ if (document.readyState === 'loading') {
 // Settings button click
 // Settings button handler - works with both ID and class
 async function handleSettingsClick() {
-    // Display business info
-    const business = await getBusiness();
-    const infoContainer = document.getElementById('business-info-display');
-    
-    if (business) {
-        infoContainer.innerHTML = `
-            <div class="business-info-item">
-                <span class="business-info-label">Name:</span>
-                <span>${escapeHtml(business.name)}</span>
-            </div>
-            <div class="business-info-item">
-                <span class="business-info-label">Email:</span>
-                <span>${escapeHtml(business.email || 'Not set')}</span>
-            </div>
-            <div class="business-info-item">
-                <span class="business-info-label">Phone:</span>
-                <span>${escapeHtml(business.phone)}</span>
-            </div>
-        `;
-    }
-    
-    // Render email linking status
-    await renderEmailLinkingStatus();
-    
-    // Set up event listeners when settings screen is shown (in case they weren't set up yet)
-    setupEmailLinkingListeners();
-    
+    // Show screen immediately for instant feedback
     showScreen('settings-screen');
+    
+    // Load data asynchronously after screen is shown
+    requestAnimationFrame(async () => {
+        try {
+            // Display business info (use cache for faster load)
+            const business = await getBusiness(true);
+            const infoContainer = document.getElementById('business-info-display');
+            
+            if (business && infoContainer) {
+                infoContainer.innerHTML = `
+                    <div class="business-info-item">
+                        <span class="business-info-label">Name:</span>
+                        <span>${escapeHtml(business.name)}</span>
+                    </div>
+                    <div class="business-info-item">
+                        <span class="business-info-label">Email:</span>
+                        <span>${escapeHtml(business.email || 'Not set')}</span>
+                    </div>
+                    <div class="business-info-item">
+                        <span class="business-info-label">Phone:</span>
+                        <span>${escapeHtml(business.phone)}</span>
+                    </div>
+                `;
+            }
+            
+            // Render email linking status (deferred)
+            await renderEmailLinkingStatus();
+            
+            // Set up event listeners when settings screen is shown (in case they weren't set up yet)
+            setupEmailLinkingListeners();
+        } catch (err) {
+            console.error('Error loading settings data:', err);
+        }
+    });
 }
 
 // Add settings button listener to ID-based button
@@ -3640,8 +3718,13 @@ document.querySelectorAll('.btn-settings').forEach(btn => {
 
 // Back from Settings
 document.getElementById('back-from-settings-btn').addEventListener('click', () => {
+    // Show screen immediately
     showScreen('home-screen');
-    renderRecentMeasurements();
+    
+    // Defer data loading
+    requestAnimationFrame(() => {
+        renderRecentMeasurements();
+    });
 });
 
 // Edit Business button click
@@ -3825,16 +3908,16 @@ function setupEmailLinkingListeners() {
 document.addEventListener('DOMContentLoaded', setupEmailLinkingListeners);
 
 // Logout button click (no data deletion)
-document.getElementById('logout-btn').addEventListener('click', () => {
+document.getElementById('logout-btn').addEventListener('click', async () => {
     if (!confirm('Are you sure you want to logout? Your data will be preserved.')) {
         return;
     }
     
-    // Clear all business session data
-    logoutBusiness();
+    // Clear all business session data and sign out from Supabase
+    await logoutBusiness();
     
-    // Show business setup screen (registration screen) after logout
-    showScreen('business-setup-screen');
+    // Always redirect to login screen after logout
+    showScreen('login-screen');
 });
 
 // Business Login Form Submission
@@ -4253,9 +4336,9 @@ function initializeApp() {
                 // Not authenticated - show login screen
                 hideLoadingScreen();
                 showScreen('login-screen');
-                return;
-            }
-            
+            return;
+        }
+        
             console.log('User authenticated:', session.user.email);
             // User is authenticated - check if business exists
             const userId = session.user.id;
@@ -4272,7 +4355,7 @@ function initializeApp() {
                     console.log('Business found, showing dashboard');
                     // Business exists - show dashboard
                     hideLoadingScreen();
-                    showScreen('home-screen');
+            showScreen('home-screen');
                     
                     // Load and display data (non-blocking)
                     loadUserData(userId).catch(err => {
