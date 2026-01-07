@@ -33,7 +33,7 @@ export default function Home() {
                     detectSessionInUrl: true
                   }
                 })
-                console.log('Supabase client initialized successfully')
+              console.log('Supabase client initialized successfully')
               }
             } else {
               console.error('Supabase environment variables not set:', {
@@ -71,17 +71,35 @@ export default function Home() {
   return (
     <>
       {/* Login Screen */}
-      <div id="login-screen" className="screen active">
-        <div className="business-setup-container">
-          <div className="business-setup-wrapper">
-            <div className="business-setup-logo">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <div id="login-screen" className="screen active auth-screen-wrapper">
+        {/* Top Image Header Section - 30vh */}
+        <div className="auth-header-image"></div>
+        
+        {/* Bottom Auth Card Container - 70vh */}
+        <div className="auth-card-container">
+          <div className="auth-card-content">
+            {/* App Logo */}
+            <div className="auth-logo">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="currentColor"/>
               </svg>
             </div>
-            <h1 className="business-setup-title">Tailor's Vault</h1>
-            <div className="business-setup-card">
-              <h2 style={{ marginBottom: '24px', fontSize: '24px', fontWeight: 600 }}>Login</h2>
+            
+            {/* App Name */}
+            <h1 className="auth-app-name">Tailor's Vault</h1>
+            
+            {/* Auth Toggle Tabs */}
+            <div className="auth-tabs">
+              <button className="auth-tab active" data-tab="login" onClick={() => { const event = new Event('click'); document.getElementById('go-to-login-link')?.dispatchEvent(event); }}>
+                Login
+              </button>
+              <button className="auth-tab" data-tab="signup" onClick={() => { const event = new Event('click'); document.getElementById('go-to-signup-link')?.dispatchEvent(event); }}>
+                Create Account
+              </button>
+            </div>
+            
+            {/* Login Form */}
+            <div className="auth-form-wrapper" id="login-form-wrapper">
               <form id="login-form">
                 <div className="form-group">
                   <label htmlFor="login-email">Email <span className="required">*</span></label>
@@ -107,7 +125,7 @@ export default function Home() {
                   Forgot Password?
                 </a>
               </p>
-              <p style={{ marginTop: '16px', textAlign: 'center', fontSize: '14px', color: 'var(--text-secondary)' }}>
+              <p style={{ marginTop: '12px', textAlign: 'center', fontSize: '14px', color: 'var(--text-secondary)' }}>
                 Don't have an account?{' '}
                 <a href="#" id="go-to-signup-link" style={{ color: 'var(--accent-yellow)', textDecoration: 'none', fontWeight: 500 }}>
                   Create account
@@ -117,40 +135,38 @@ export default function Home() {
               
               {/* Forgot Password Form */}
               <div id="forgot-password-form" style={{ marginTop: '24px', display: 'none' }}>
-                <div className="business-setup-card">
-                  <h2 style={{ marginBottom: '24px', fontSize: '24px', fontWeight: 600 }}>Reset Password</h2>
-                  <p className="settings-info" style={{ marginBottom: '20px', fontSize: '14px', color: 'var(--text-secondary)' }}>
-                    Enter your email address and we'll send you a link to reset your password.
-                  </p>
-                  <form id="forgot-password-submit-form">
-                    <div className="form-group">
-                      <label htmlFor="forgot-password-email">Email <span className="required">*</span></label>
-                      <input 
-                        type="email" 
-                        id="forgot-password-email" 
-                        required 
-                        autoComplete="email" 
-                        placeholder="your@email.com"
-                      />
-                    </div>
-                    <button type="submit" className="btn btn-primary btn-save" style={{ width: '100%', marginTop: '8px' }}>
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-                        <polyline points="22,6 12,13 2,6"></polyline>
-                      </svg>
-                      Send Reset Link
-                    </button>
-                  </form>
-                  <button 
-                    id="cancel-forgot-password-btn" 
-                    className="btn btn-secondary" 
-                    style={{ width: '100%', marginTop: '12px' }}
-                  >
-                    Cancel
+                <h2 style={{ marginBottom: '20px', fontSize: '20px', fontWeight: 600 }}>Reset Password</h2>
+                <p className="settings-info" style={{ marginBottom: '20px', fontSize: '14px', color: 'var(--text-secondary)' }}>
+                  Enter your email address and we'll send you a link to reset your password.
+                </p>
+                <form id="forgot-password-submit-form">
+                  <div className="form-group">
+                    <label htmlFor="forgot-password-email">Email <span className="required">*</span></label>
+                    <input 
+                      type="email" 
+                      id="forgot-password-email" 
+                      required 
+                      autoComplete="email" 
+                      placeholder="your@email.com"
+                    />
+                  </div>
+                  <button type="submit" className="btn btn-primary btn-save" style={{ width: '100%', marginTop: '8px' }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                      <polyline points="22,6 12,13 2,6"></polyline>
+                    </svg>
+                    Send Reset Link
                   </button>
-                  <div id="forgot-password-error" className="form-error-message" style={{ display: 'none' }}></div>
-                  <div id="forgot-password-success" className="form-success-message" style={{ display: 'none' }}></div>
-                </div>
+                </form>
+                <button 
+                  id="cancel-forgot-password-btn" 
+                  className="btn btn-secondary" 
+                  style={{ width: '100%', marginTop: '12px' }}
+                >
+                  Cancel
+                </button>
+                <div id="forgot-password-error" className="form-error-message" style={{ display: 'none' }}></div>
+                <div id="forgot-password-success" className="form-success-message" style={{ display: 'none' }}></div>
               </div>
             </div>
           </div>
@@ -158,17 +174,35 @@ export default function Home() {
       </div>
 
       {/* Sign Up Screen */}
-      <div id="signup-screen" className="screen">
-        <div className="business-setup-container">
-          <div className="business-setup-wrapper">
-            <div className="business-setup-logo">
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <div id="signup-screen" className="screen auth-screen-wrapper">
+        {/* Top Image Header Section - 30vh */}
+        <div className="auth-header-image"></div>
+        
+        {/* Bottom Auth Card Container - 70vh */}
+        <div className="auth-card-container">
+          <div className="auth-card-content">
+            {/* App Logo */}
+            <div className="auth-logo">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="currentColor"/>
               </svg>
             </div>
-            <h1 className="business-setup-title">Tailor's Vault</h1>
-            <div className="business-setup-card">
-              <h2 style={{ marginBottom: '24px', fontSize: '24px', fontWeight: 600 }}>Create Account</h2>
+            
+            {/* App Name */}
+            <h1 className="auth-app-name">Tailor's Vault</h1>
+            
+            {/* Auth Toggle Tabs */}
+            <div className="auth-tabs">
+              <button className="auth-tab" data-tab="login" onClick={() => { const event = new Event('click'); document.getElementById('go-to-login-link')?.dispatchEvent(event); }}>
+                Login
+              </button>
+              <button className="auth-tab active" data-tab="signup" onClick={() => { const event = new Event('click'); document.getElementById('go-to-signup-link')?.dispatchEvent(event); }}>
+                Create Account
+              </button>
+            </div>
+            
+            {/* Signup Form */}
+            <div className="auth-form-wrapper" id="signup-form-wrapper">
               <form id="signup-form">
                 <div className="form-group">
                   <label htmlFor="signup-email">Email <span className="required">*</span></label>
@@ -196,7 +230,7 @@ export default function Home() {
                   Create Account
                 </button>
               </form>
-              <p style={{ marginTop: '24px', textAlign: 'center', fontSize: '14px', color: 'var(--text-secondary)' }}>
+              <p style={{ marginTop: '16px', textAlign: 'center', fontSize: '14px', color: 'var(--text-secondary)' }}>
                 Already have an account?{' '}
                 <a href="#" id="go-to-login-link" style={{ color: 'var(--accent-yellow)', textDecoration: 'none', fontWeight: 500 }}>
                   Login
@@ -222,22 +256,22 @@ export default function Home() {
             <h1 className="business-setup-title">Tailor's Vault</h1>
             <div className="business-setup-card">
               <p className="business-setup-description">Register your business to get started</p>
-              <form id="business-setup-form">
-                <div className="form-group">
-                  <label htmlFor="business-name">Business Name <span className="required">*</span></label>
-                  <input type="text" id="business-name" required autoComplete="off" placeholder="e.g., Elite Tailors" />
-                </div>
+          <form id="business-setup-form">
+            <div className="form-group">
+              <label htmlFor="business-name">Business Name <span className="required">*</span></label>
+              <input type="text" id="business-name" required autoComplete="off" placeholder="e.g., Elite Tailors" />
+            </div>
 
-                <div className="form-group">
+            <div className="form-group">
                   <label htmlFor="business-email">Business Email <span className="optional">(Optional)</span></label>
                   <input type="email" id="business-email" autoComplete="off" placeholder="e.g., info@elitetailors.com" />
                   <small className="form-helper-text">Optional: For account recovery and multi-device access</small>
-                </div>
+            </div>
 
-                <div className="form-group">
-                  <label htmlFor="business-phone">Business Phone <span className="required">*</span></label>
-                  <input type="tel" id="business-phone" required autoComplete="off" placeholder="e.g., +234 800 000 0000" />
-                </div>
+            <div className="form-group">
+              <label htmlFor="business-phone">Business Phone <span className="required">*</span></label>
+              <input type="tel" id="business-phone" required autoComplete="off" placeholder="e.g., +234 800 000 0000" />
+            </div>
 
                 <button type="submit" className="btn btn-primary btn-save">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -245,7 +279,7 @@ export default function Home() {
               </svg>
               Continue
             </button>
-              </form>
+          </form>
             </div>
           </div>
         </div>
@@ -292,36 +326,78 @@ export default function Home() {
           </div>
         </nav>
         <div className="container">
-          <div className="action-buttons">
-            <button id="new-measurement-btn" className="btn btn-primary">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="12" y1="5" x2="12" y2="19"></line>
-                <line x1="5" y1="12" x2="19" y2="12"></line>
-              </svg>
-              New Measurement
+          {/* Dashboard Welcome Section */}
+          <div className="dashboard-welcome">
+            <h5 className="dashboard-greeting">Hi, <span id="dashboard-business-name">Measurement Vault</span> 👋</h5>
+            <h3 className="dashboard-subtext">What are you measuring today?</h3>
+          </div>
+
+          {/* Dashboard Action Cards */}
+          <div className="dashboard-action-grid">
+            {/* Left Column - Primary Action (Large Card) */}
+            <button id="new-measurement-btn" className="dashboard-action-card dashboard-action-card-primary">
+              <div className="dashboard-card-top">
+                <div className="dashboard-icon-container dashboard-icon-primary">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                  </svg>
+                </div>
+                <svg className="dashboard-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="7" y1="17" x2="17" y2="7"></line>
+                  <polyline points="7 7 17 7 17 17"></polyline>
+                </svg>
+              </div>
+              <div className="dashboard-card-bottom">
+                <h4 className="dashboard-card-label">New Measurement</h4>
+              </div>
             </button>
-            <button id="search-measurements-btn" className="btn btn-secondary">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8"></circle>
-                <path d="m21 21-4.35-4.35"></path>
-              </svg>
-              Search Measurements
+
+            {/* Right Column - Secondary Actions (Stacked Cards) */}
+            <div className="dashboard-action-stack">
+              <button id="search-measurements-btn" className="dashboard-action-card dashboard-action-card-secondary">
+                <div className="dashboard-card-top">
+                  <div className="dashboard-icon-container dashboard-icon-secondary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="11" cy="11" r="8"></circle>
+                      <path d="m21 21-4.35-4.35"></path>
+                    </svg>
+                  </div>
+                  <svg className="dashboard-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="7" y1="17" x2="17" y2="7"></line>
+                    <polyline points="7 7 17 7 17 17"></polyline>
+                  </svg>
+                </div>
+                <div className="dashboard-card-bottom">
+                  <h4 className="dashboard-card-label">Search Measurement</h4>
+                </div>
             </button>
-            <button id="clients-btn" className="btn btn-secondary">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                <circle cx="9" cy="7" r="4"></circle>
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-              </svg>
-              Clients
+              <button id="clients-btn" className="dashboard-action-card dashboard-action-card-secondary">
+                <div className="dashboard-card-top">
+                  <div className="dashboard-icon-container dashboard-icon-secondary">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                      <circle cx="9" cy="7" r="4"></circle>
+                      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                  </div>
+                  <svg className="dashboard-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="7" y1="17" x2="17" y2="7"></line>
+                    <polyline points="7 7 17 7 17 17"></polyline>
+                  </svg>
+                </div>
+                <div className="dashboard-card-bottom">
+                  <h4 className="dashboard-card-label">Clients</h4>
+                </div>
             </button>
+            </div>
           </div>
           
           <div className="recent-section">
             <div className="recent-measurements-card">
               <div className="recent-measurements-header">
-                <h3>Recent Measurements</h3>
+            <h3>Recent Measurements</h3>
                 <div id="recent-measurements-control"></div>
               </div>
               <div id="recent-measurements" className="recent-measurements-list"></div>

@@ -2153,6 +2153,12 @@ function updateNavbarBusinessNameSync(business) {
             element.removeAttribute('title');
         }
     });
+    
+    // Update dashboard greeting business name
+    const dashboardBusinessName = document.getElementById('dashboard-business-name');
+    if (dashboardBusinessName) {
+        dashboardBusinessName.textContent = businessName;
+    }
 }
 
 // Screen Navigation (Optimized)
@@ -2167,7 +2173,7 @@ function showScreen(screenId) {
         requestAnimationFrame(() => {
             // Hide all screens (batch DOM updates)
             cachedScreens.forEach(screen => {
-                screen.classList.remove('active');
+        screen.classList.remove('active');
                 screen.style.display = '';
             });
             
@@ -2192,9 +2198,9 @@ function showScreen(screenId) {
             // Defer heavy operations to next frame for instant screen switch
             requestAnimationFrame(() => {
                 // Update business header when showing home screen (deferred)
-                if (screenId === 'home-screen') {
+    if (screenId === 'home-screen') {
                     try {
-                        updateBusinessHeader();
+        updateBusinessHeader();
                     } catch (err) {
                         console.warn('Error updating business header:', err);
                     }
@@ -2242,7 +2248,7 @@ document.getElementById('search-measurements-btn').addEventListener('click', () 
         const searchInput = document.getElementById('search-input');
         if (searchInput) {
             searchInput.focus();
-            renderSearchResults('');
+    renderSearchResults('');
         }
     });
 });
@@ -2256,7 +2262,7 @@ document.getElementById('back-from-search-btn').addEventListener('click', () => 
     requestAnimationFrame(() => {
         const searchInput = document.getElementById('search-input');
         if (searchInput) searchInput.value = '';
-        renderRecentMeasurements();
+    renderRecentMeasurements();
     });
 });
 
@@ -2274,7 +2280,7 @@ document.getElementById('clients-btn').addEventListener('click', async () => {
     
     // Load data asynchronously after screen is shown
     requestAnimationFrame(async () => {
-        await renderClientsList();
+    await renderClientsList();
     });
 });
 
@@ -3672,25 +3678,25 @@ async function handleSettingsClick() {
         try {
             // Display business info (use cache for faster load)
             const business = await getBusiness(true);
-            const infoContainer = document.getElementById('business-info-display');
-            
+    const infoContainer = document.getElementById('business-info-display');
+    
             if (business && infoContainer) {
-                infoContainer.innerHTML = `
-                    <div class="business-info-item">
-                        <span class="business-info-label">Name:</span>
-                        <span>${escapeHtml(business.name)}</span>
-                    </div>
-                    <div class="business-info-item">
-                        <span class="business-info-label">Email:</span>
+        infoContainer.innerHTML = `
+            <div class="business-info-item">
+                <span class="business-info-label">Name:</span>
+                <span>${escapeHtml(business.name)}</span>
+            </div>
+            <div class="business-info-item">
+                <span class="business-info-label">Email:</span>
                         <span>${escapeHtml(business.email || 'Not set')}</span>
-                    </div>
-                    <div class="business-info-item">
-                        <span class="business-info-label">Phone:</span>
-                        <span>${escapeHtml(business.phone)}</span>
-                    </div>
-                `;
-            }
-            
+            </div>
+            <div class="business-info-item">
+                <span class="business-info-label">Phone:</span>
+                <span>${escapeHtml(business.phone)}</span>
+            </div>
+        `;
+    }
+    
             // Render email linking status (deferred)
             await renderEmailLinkingStatus();
             
@@ -3723,7 +3729,7 @@ document.getElementById('back-from-settings-btn').addEventListener('click', () =
     
     // Defer data loading
     requestAnimationFrame(() => {
-        renderRecentMeasurements();
+    renderRecentMeasurements();
     });
 });
 
@@ -4808,6 +4814,8 @@ function setupAuthForms() {
         goToSignupLink.addEventListener('click', (e) => {
             e.preventDefault();
             showScreen('signup-screen');
+            // Update tab states
+            updateAuthTabs('signup');
         });
     }
     
@@ -4816,7 +4824,52 @@ function setupAuthForms() {
         goToLoginLink.addEventListener('click', (e) => {
             e.preventDefault();
             showScreen('login-screen');
+            // Update tab states
+            updateAuthTabs('login');
         });
+    }
+    
+    // Function to update auth tab states
+    function updateAuthTabs(activeTab) {
+        const loginScreen = document.getElementById('login-screen');
+        const signupScreen = document.getElementById('signup-screen');
+        
+        // Update login screen tabs
+        if (loginScreen) {
+            const loginTabs = loginScreen.querySelectorAll('.auth-tab');
+            loginTabs.forEach(tab => {
+                if (tab.dataset.tab === activeTab) {
+                    tab.classList.add('active');
+                } else {
+                    tab.classList.remove('active');
+                }
+            });
+        }
+        
+        // Update signup screen tabs
+        if (signupScreen) {
+            const signupTabs = signupScreen.querySelectorAll('.auth-tab');
+            signupTabs.forEach(tab => {
+                if (tab.dataset.tab === activeTab) {
+                    tab.classList.add('active');
+                } else {
+                    tab.classList.remove('active');
+                }
+            });
+        }
+    }
+    
+    // Update tabs when screens are shown
+    const originalShowScreen = window.showScreen;
+    if (typeof originalShowScreen === 'function') {
+        window.showScreen = function(screenId) {
+            originalShowScreen(screenId);
+            if (screenId === 'login-screen') {
+                updateAuthTabs('login');
+            } else if (screenId === 'signup-screen') {
+                updateAuthTabs('signup');
+            }
+        };
     }
 }
 
