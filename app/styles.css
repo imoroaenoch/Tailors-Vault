@@ -181,12 +181,12 @@ body {
 
 /* Auth Screen Wrapper - Full height container */
 .auth-screen-wrapper {
-    height: 100%;
-    min-height: 100%;
+    height: 100vh; /* Exact viewport height - no gaps */
+    min-height: 100vh;
     display: flex;
     flex-direction: column;
     width: 100%;
-    overflow: hidden;
+    overflow: hidden; /* Hide overflow to prevent black space showing */
     background-color: var(--bg-primary);
     position: relative;
 }
@@ -203,19 +203,26 @@ body {
     flex-shrink: 0;
 }
 
-/* Auth Card Container - Bottom section */
+/* Auth Card Container - Bottom section (scrollable) */
 .auth-card-container {
-    flex: 1;
+    flex: 1; /* Fill remaining space after image */
     background-color: var(--bg-card);
     border-radius: 24px 24px 0 0;
     box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.1);
     padding: 32px 24px;
+    padding-bottom: 40px; /* Extra padding at bottom for scroll */
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
+    overflow-y: auto; /* Allow vertical scrolling when content exceeds viewport */
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
-    min-height: 0; /* Allow flex item to shrink */
+    min-height: 0; /* Critical: Allow flex item to shrink below content size */
+    max-height: calc(100vh - 30vh); /* Limit to viewport minus header */
+    box-sizing: border-box; /* Include padding in height calculation */
+    /* Ensure scrolling works on all devices */
+    overscroll-behavior: contain; /* Prevent scroll chaining */
+    /* Force scrolling to work */
+    position: relative;
 }
 
 [data-theme="light"] .auth-card-container {
@@ -230,7 +237,8 @@ body {
     margin: 0 auto;
     display: flex;
     flex-direction: column;
-    flex: 1;
+    /* Don't constrain height - allow content to expand naturally */
+    /* min-height removed to allow scrolling when content exceeds container */
 }
 
 /* Auth Logo */
@@ -314,9 +322,10 @@ body {
 
 /* Auth Form Wrapper */
 .auth-form-wrapper {
-    flex: 1;
     display: flex;
     flex-direction: column;
+    width: 100%;
+    /* Allow form to expand naturally - don't constrain with flex: 1 */
 }
 
 /* Business Setup Container (kept for business-setup-screen) */
@@ -402,11 +411,15 @@ body {
     .auth-header-image {
         height: 25vh;
         min-height: 180px;
+        max-height: 200px; /* Prevent header from taking too much space on small screens */
     }
     
     .auth-card-container {
-        padding: 24px 20px;
+        padding: 25px 20px;
+        padding-bottom: 35px; /* Extra padding at bottom for scroll on mobile */
         border-radius: 20px 20px 0 0;
+        max-height: calc(100vh - 25vh); /* Enable scrolling on mobile - viewport minus header */
+        /* flex: 1 automatically fills remaining space */
     }
     
     .auth-logo {
@@ -438,6 +451,23 @@ body {
 @media (min-width: 481px) and (max-width: 768px) {
     .auth-header-image {
         height: 28vh;
+    }
+    
+    .auth-card-container {
+        max-height: calc(100vh - 28vh); /* Enable scrolling on medium screens */
+    }
+}
+
+/* Ensure auth forms are scrollable on very small screens */
+@media (max-height: 600px) {
+    .auth-header-image {
+        height: 20vh;
+        min-height: 150px;
+    }
+    
+    .auth-card-container {
+        padding-bottom: 30px; /* Extra padding at bottom for scroll on short screens */
+        max-height: calc(100vh - 20vh); /* Enable scrolling on short screens - more space for form */
     }
 }
 
@@ -869,6 +899,14 @@ body {
 .screen.active {
     display: block;
     opacity: 1;
+}
+
+/* Auth screens should allow scrolling - override default overflow */
+.screen.auth-screen-wrapper {
+    overflow: hidden; /* Hide overflow to prevent black space */
+    padding: 0; /* Remove padding since auth-wrapper handles spacing */
+    height: 100vh; /* Use viewport height for auth screens */
+    min-height: 100vh;
 }
 
 /* Allow scrolling in screen content when needed */
