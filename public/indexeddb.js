@@ -255,12 +255,13 @@ async function getUnsyncedClients(userId) {
     const db = await getDB();
     const transaction = db.transaction([STORE_CLIENTS], 'readonly');
     const store = transaction.objectStore(STORE_CLIENTS);
-    const index = store.index('synced');
+    const index = store.index('user_id');
 
     return new Promise((resolve, reject) => {
-        const request = index.getAll(false);
+        // Get all clients for this user, then filter by synced === false
+        const request = index.getAll(userId);
         request.onsuccess = () => {
-            const clients = request.result.filter(c => c.user_id === userId);
+            const clients = request.result.filter(c => c.synced === false);
             resolve(clients);
         };
         request.onerror = () => reject(request.error);
@@ -500,12 +501,13 @@ async function getUnsyncedMeasurements(userId) {
     const db = await getDB();
     const transaction = db.transaction([STORE_MEASUREMENTS], 'readonly');
     const store = transaction.objectStore(STORE_MEASUREMENTS);
-    const index = store.index('synced');
+    const index = store.index('user_id');
 
     return new Promise((resolve, reject) => {
-        const request = index.getAll(false);
+        // Get all measurements for this user, then filter by synced === false
+        const request = index.getAll(userId);
         request.onsuccess = () => {
-            const measurements = request.result.filter(m => m.user_id === userId);
+            const measurements = request.result.filter(m => m.synced === false);
             resolve(measurements);
         };
         request.onerror = () => reject(request.error);
