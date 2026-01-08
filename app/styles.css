@@ -54,7 +54,8 @@
 
 html {
     height: 100%;
-    overflow: hidden;
+    margin: 0;
+    padding: 0;
 }
 
 body {
@@ -65,16 +66,43 @@ body {
     -webkit-font-smoothing: antialiased;
     transition: background-color 0.3s ease, color 0.3s ease;
     height: 100%;
-    overflow: hidden;
-    width: 100%;
     margin: 0;
     padding: 0;
+    width: 100%;
+    /* Main flex container */
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+}
+
+/* Remove body bottom padding on auth screens only */
+body.auth-screen-active {
+    padding-bottom: 0 !important;
 }
 
 .container {
     max-width: 500px;
-    margin: 0 auto;
+    margin: 0;
     padding: 24px 28px;
+}
+
+/* Clients screen - full width, no centering */
+#clients-screen .container {
+    max-width: 100%; /* Remove width constraint */
+    margin: 0; /* Remove centering */
+    padding: 0; /* Remove all padding */
+    width: 100%; /* Full width */
+}
+
+/* Clients screen header - add padding only to header */
+#clients-screen .screen-header {
+    padding: 20px 20px 12px 20px; /* Add padding only to header */
+    margin-bottom: 0;
+}
+
+/* Clients list - full width, with padding */
+#clients-screen .clients-list {
+    padding: 0 20px 20px 20px; /* Add padding only to list */
 }
 
 /* Compact screen padding (matching new-measurement-screen) */
@@ -86,7 +114,7 @@ body {
 /* New Measurement Form Container - Centered, not full width */
 #new-measurement-screen .measurement-form-container {
     max-width: 600px;
-    margin: 0 auto;
+    margin: 0 ;
 }
 
 /* New Measurement Screen - Base Compact Styles */
@@ -181,8 +209,7 @@ body {
 
 /* Auth Screen Wrapper - Full height container */
 .auth-screen-wrapper {
-    height: 100vh; /* Exact viewport height - no gaps */
-    min-height: 100vh;
+    min-height: 100%; /* Use percentage, not viewport height */
     display: flex;
     flex-direction: column;
     width: 100%;
@@ -333,13 +360,12 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    height: 100%;
-    min-height: 100%;
+    /* Remove fixed heights - use natural content height */
+    min-height: 100%; /* At least full height but can grow */
     padding: 24px 20px;
     width: 100%;
-    overflow-y: auto;
-    overflow-x: hidden;
-    -webkit-overflow-scrolling: touch;
+    /* Remove overflow - scrolling handled by .screen */
+    box-sizing: border-box;
 }
 
 .business-setup-wrapper {
@@ -885,37 +911,45 @@ body {
 /* Screen Management */
 .screen {
     display: none;
-    height: 100%;
-    min-height: 100%;
+    /* Remove fixed heights - use natural content height */
+    min-height: 100%; /* At least full height but can grow */
     padding-bottom: 32px;
     padding-top: 32px;
     opacity: 0;
     animation: fadeInScreen var(--transition-medium);
-    overflow: hidden;
+    /* Remove overflow: hidden - allow natural scrolling */
     position: relative;
     box-sizing: border-box;
-}
-
-.screen.active {
-    display: block;
-    opacity: 1;
-}
-
-/* Auth screens should allow scrolling - override default overflow */
-.screen.auth-screen-wrapper {
-    overflow: hidden; /* Hide overflow to prevent black space */
-    padding: 0; /* Remove padding since auth-wrapper handles spacing */
-    height: 100vh; /* Use viewport height for auth screens */
-    min-height: 100vh;
-}
-
-/* Allow scrolling in screen content when needed */
-.screen .container {
-    height: 100%;
+    /* Scroll container - ONE main scroll area */
+    flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
+}
+
+.screen.active {
+    display: flex; /* Changed from block to flex for proper layout */
+    flex-direction: column;
+    opacity: 1;
+}
+
+/* Auth screens - special handling */
+.screen.auth-screen-wrapper {
+    padding: 0; /* Remove padding since auth-wrapper handles spacing */
+    min-height: 100%; /* Use percentage, not viewport height */
+    /* Remove fixed viewport height */
+    overflow: hidden; /* Keep hidden to prevent body scroll, but allow inner scrolling */
+}
+
+/* Screen containers - natural flow */
+.screen .container {
+    /* Remove fixed height - let content flow naturally */
+    /* Scrolling handled by .screen itself */
     box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    flex: 1; /* Take remaining space */
+    min-height: 0; /* Allow flex item to shrink */
 }
 
 @keyframes fadeInScreen {
@@ -1327,7 +1361,7 @@ textarea {
     }
     
     .container {
-        padding: 10px 20px;
+        padding: 30px 20px;
     }
     
     .screen-header {
@@ -1875,9 +1909,10 @@ textarea {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    max-height: calc(100% - 200px);
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
+    /* Remove max-height constraint - let it flow naturally */
+    /* Scrolling is handled by .screen parent */
+    flex: 1; /* Take remaining space in flex container */
+    min-height: 0; /* Allow flex item to shrink */
 }
 
 /* Leaderboard Card */
@@ -2401,7 +2436,7 @@ textarea {
 .settings-content {
     background-color: var(--bg-card);
     border-radius: 12px;
-    padding: 18px;
+    padding: 18px ;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     border: 1px solid var(--border-color);
     transition: background-color 180ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -2548,7 +2583,7 @@ textarea {
     
     /* Add padding to body content to prevent footer overlap */
     body {
-        padding-bottom: 72px;
+        padding-bottom: 70px;
     }
 }
 
