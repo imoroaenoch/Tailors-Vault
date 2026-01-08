@@ -41,7 +41,8 @@ let isHydrated = false;
 // Auth ready state - tracks ONLY Supabase auth resolution (not business/data loading)
 let authReady = false;
 let authTimeoutId = null;
-const AUTH_TIMEOUT_MS = 5000; // 5 seconds timeout failsafe
+const AUTH_TIMEOUT_MS = 2000; // 2 seconds hard timeout - always show UI after this
+const LOADING_SCREEN_TIMEOUT_MS = 1500; // 1.5 seconds max for loading screen
 
 // Performance: Cache DOM elements
 let cachedScreens = null;
@@ -389,9 +390,10 @@ async function getSupabaseAsync() {
             return window.supabaseClient;
         }
     
-    // Wait for Supabase to be initialized (max 5 seconds)
+    // Wait for Supabase to be initialized (max 2 seconds - don't block too long)
     let attempts = 0;
-    while (!window.supabaseClient && attempts < 50) {
+    const maxAttempts = 20; // 2 seconds max (20 * 100ms)
+    while (!window.supabaseClient && attempts < maxAttempts) {
         await new Promise(resolve => setTimeout(resolve, 100));
         attempts++;
     }
@@ -400,7 +402,10 @@ async function getSupabaseAsync() {
         return window.supabaseClient;
     }
     
-    console.warn('Supabase client not initialized after waiting. Make sure Supabase is initialized in page.tsx');
+    // Don't warn if offline - this is expected
+    if (navigator.onLine) {
+        console.warn('[Supabase] Client not initialized after waiting. May be offline or still loading.');
+    }
     return null;
 }
 
@@ -436,10 +441,26 @@ async function hasBusiness() {
 }
 
 // Get business for current authenticated user (single source of truth)
+// NOTE: Always checks cache first, only queries Supabase if online
 async function getBusiness(useCache = true) {
-    // Check cache first
+    // ALWAYS check localStorage cache first (offline-first)
+    const cachedBusiness = getCachedBusiness();
+    if (cachedBusiness) {
+        // Update in-memory cache
+        businessDataCache = cachedBusiness;
+        businessDataCacheTime = Date.now();
+        return cachedBusiness;
+    }
+    
+    // Check in-memory cache
     if (useCache && businessDataCache && (Date.now() - businessDataCacheTime) < BUSINESS_CACHE_DURATION) {
         return businessDataCache;
+    }
+    
+    // Do NOT query Supabase if offline
+    if (!isOnline()) {
+        console.log('[getBusiness] Offline - returning cached business');
+        return cachedBusiness || null;
     }
     
     const user = await getCurrentUser();
@@ -452,32 +473,45 @@ async function getBusiness(useCache = true) {
         return null;
     }
     
-    // Query business by user_id only - NO fallbacks
-    const { data, error } = await supabase
-        .from('businesses')
-        .select('*')
-        .eq('user_id', user.id)
-        .limit(1)
-        .single();
-    
-    if (error || !data) {
-        return null;
+    try {
+        // Query business by user_id only - NO fallbacks
+        const { data, error } = await supabase
+            .from('businesses')
+            .select('*')
+            .eq('user_id', user.id)
+            .limit(1)
+            .single();
+        
+        if (error) {
+            console.warn('[getBusiness] Supabase query error:', error);
+            // Return cached business if available
+            return cachedBusiness || null;
+        }
+        
+        if (!data) {
+            return cachedBusiness || null;
+        }
+        
+        // Return business data
+        const business = {
+            id: data.id,
+            name: data.name,
+            email: data.email || null,
+            phone: data.phone,
+            createdAt: data.created_at
+        };
+        
+        // Cache the result (both in-memory and localStorage)
+        businessDataCache = business;
+        businessDataCacheTime = Date.now();
+        setCachedBusiness(business);
+        
+        return business;
+    } catch (err) {
+        console.warn('[getBusiness] Network error:', err);
+        // Return cached business if available
+        return cachedBusiness || null;
     }
-    
-    // Return business data
-    const business = {
-        id: data.id,
-        name: data.name,
-        email: data.email || null,
-        phone: data.phone,
-        createdAt: data.created_at
-    };
-    
-    // Cache the result
-    businessDataCache = business;
-    businessDataCacheTime = Date.now();
-    
-    return business;
 }
 
 // Clear business cache (call after updates)
@@ -1113,10 +1147,22 @@ async function findBusinessByCredentials(name, email, phone) {
 
 // Logout - Set logged out state without deleting data
 async function logoutBusiness() {
+    // CRITICAL: Set logout flag FIRST before signing out
+    // This ensures auth state listener knows it's an explicit logout
+    localStorage.setItem(LOGOUT_STATE_KEY, 'true');
+    
+    // Clear cached session
+    clearCachedSession();
+    
     // Sign out from Supabase (this clears auth session)
-    const supabase = await getSupabaseAsync();
-    if (supabase) {
-        await supabase.auth.signOut();
+    try {
+        const supabase = await getSupabaseAsync();
+        if (supabase && isOnline()) {
+            await supabase.auth.signOut();
+        }
+    } catch (err) {
+        console.warn('[Logout] Error signing out from Supabase:', err);
+        // Continue with logout even if Supabase fails
     }
     
     // Clear business cache
@@ -1129,7 +1175,6 @@ async function logoutBusiness() {
         CACHE_MEASUREMENTS_KEY,
         CACHE_TIMESTAMP_KEY,
         CURRENT_BUSINESS_ID_KEY,
-        LOGOUT_STATE_KEY,
         PENDING_SYNC_QUEUE_KEY
     ];
     
@@ -1996,6 +2041,10 @@ async function updateBusinessHeader() {
 function updateBusinessHeaderSync(business) {
     const headerElement = document.getElementById('business-header-name');
     if (headerElement) {
+        // If business is null/undefined, try to get from cache
+        if (!business) {
+            business = getCachedBusiness();
+        }
         if (business && business.name && !isUserLoggedOut()) {
             const businessName = business.name;
             headerElement.textContent = businessName;
@@ -2015,6 +2064,10 @@ async function updateNavbarBusinessName() {
 
 // Update business name in all navbar instances (sync - uses provided business object)
 function updateNavbarBusinessNameSync(business) {
+    // If business is null/undefined, try to get from cache
+    if (!business) {
+        business = getCachedBusiness();
+    }
     const businessName = (business && business.name && !isUserLoggedOut()) ? business.name : 'Measurement Vault';
     
     document.querySelectorAll('.navbar-business-name').forEach(element => {
@@ -4292,6 +4345,7 @@ async function initializeAuthListener() {
 
 // ========== STANDARD AUTHENTICATION INITIALIZATION ==========
 // Setup auth state change listener for session persistence
+// CRITICAL: Only respects SIGNED_OUT on explicit logout, ignores network failures
 function setupAuthStateListener() {
     const supabase = getSupabase();
     if (!supabase) return;
@@ -4300,22 +4354,45 @@ function setupAuthStateListener() {
     supabase.auth.onAuthStateChange((event, session) => {
         console.log('[Auth] State changed:', event, session?.user?.email || 'no user');
         
-        if (event === 'SIGNED_OUT' || !session) {
-            // User signed out - hide all authenticated screens, show login
-            const allScreens = document.querySelectorAll('.screen');
-            allScreens.forEach(screen => {
-                screen.classList.remove('active');
-                screen.style.display = 'none';
-            });
-            showScreen('login-screen');
-            // Stop background sync
-            if (window.syncManager) {
-                window.syncManager.stopBackgroundSync();
+        // CRITICAL: Only respect SIGNED_OUT if it's an explicit logout
+        // Network failures or offline state should NOT trigger logout
+        if (event === 'SIGNED_OUT') {
+            // Check if this is an explicit logout (logout flag set)
+            const isExplicitLogout = localStorage.getItem(LOGOUT_STATE_KEY) === 'true';
+            
+            if (isExplicitLogout) {
+                // User explicitly logged out - hide all authenticated screens, show login
+                console.log('[Auth] Explicit logout detected');
+                const allScreens = document.querySelectorAll('.screen');
+                allScreens.forEach(screen => {
+                    screen.classList.remove('active');
+                    screen.style.display = 'none';
+                });
+                showScreen('login-screen');
+                // Stop background sync
+                if (window.syncManager) {
+                    window.syncManager.stopBackgroundSync();
+                }
+            } else {
+                // SIGNED_OUT but not explicit logout - likely network failure
+                // Ignore it and keep user logged in with cached session
+                console.log('[Auth] SIGNED_OUT event ignored (not explicit logout, likely network failure)');
+                // Restore from cache if we have one
+                const cachedSession = getCachedSession();
+                if (cachedSession && cachedSession.user) {
+                    console.log('[Auth] Restoring from cached session after network failure');
+                    restoreUserSession(cachedSession.user.id).catch(err => {
+                        console.warn('[Auth] Error restoring cached session:', err);
+                    });
+                }
             }
         } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
             // User signed in or token refreshed - restore app state
             // CRITICAL: Do NOT show auth screens if user is authenticated
             if (session && session.user) {
+                // Cache the session explicitly
+                cacheSession(session);
+                
                 // Hide auth screens immediately
                 const loginScreen = document.getElementById('login-screen');
                 const signupScreen = document.getElementById('signup-screen');
@@ -4338,6 +4415,7 @@ function setupAuthStateListener() {
 
 // Restore user session and route to correct screen
 // NOTE: This function is NON-BLOCKING - loader should already be hidden before this is called
+// NOTE: UI should already be shown based on cached data - this function just syncs data
 async function restoreUserSession(userId) {
     try {
         console.log('[Auth] Restoring session for user:', userId);
@@ -4355,50 +4433,69 @@ async function restoreUserSession(userId) {
         }
         
         // Check if business exists for this user
-        // Try cache first for offline support (non-blocking)
+        // ALWAYS check cache FIRST (offline-first approach)
         let business = getCachedBusiness();
         
-        // If no cache or cache is stale, fetch from Supabase (non-blocking)
-        if (!business || !isOnline()) {
+        // Only query Supabase if online AND we don't have cached business
+        // This is NON-BLOCKING - UI already shown
+        if (isOnline() && !business) {
             try {
                 const fetchedBusiness = await getBusinessForUser(userId);
                 if (fetchedBusiness) {
                     business = fetchedBusiness;
                     // Update cache
                     setCachedBusiness(business);
+                    // Update UI if dashboard is showing
+                    const currentScreen = document.querySelector('.screen.active');
+                    if (currentScreen && currentScreen.id === 'home-screen') {
+                        updateBusinessHeaderSync(business);
+                        updateNavbarBusinessNameSync(business);
+                    } else {
+                        // Show dashboard if we just got business
+                        showScreen('home-screen');
+                        updateBusinessHeaderSync(business);
+                        updateNavbarBusinessNameSync(business);
+                    }
                 }
             } catch (fetchErr) {
-                // If offline and we have cached business, use it
-                if (!isOnline() && business) {
-                    console.log('[Auth] Offline - using cached business data');
-                } else {
-                    // No cache and offline, or fetch failed
-                    console.warn('[Auth] Could not fetch business:', fetchErr);
-                    business = null;
-                }
+                // Network error - log warning but keep using cached data if available
+                console.warn('[Auth] Could not fetch business from Supabase:', fetchErr);
+                // Do NOT set business to null - preserve cached data
+                // UI already shown, continue with cached data
             }
+        } else if (!isOnline() && business) {
+            // Offline with cached business - use it
+            console.log('[Auth] Offline - using cached business data');
         }
         
+        // If no business found, show business setup (only if not already showing)
         if (!business) {
-            console.log('[Auth] No business found, showing business setup');
-            // Show business setup - this is the ONLY time business-setup should appear for authenticated user
-            showScreen('business-setup-screen');
-        } else {
-            console.log('[Auth] Business found, showing dashboard');
-            // Hide business setup screen if it was showing
-            const businessSetupScreen = document.getElementById('business-setup-screen');
-            if (businessSetupScreen) {
-                businessSetupScreen.classList.remove('active');
-                businessSetupScreen.style.display = 'none';
+            const currentScreen = document.querySelector('.screen.active');
+            if (!currentScreen || currentScreen.id !== 'business-setup-screen') {
+                console.log('[Auth] No business found, showing business setup');
+                showScreen('business-setup-screen');
             }
-            // Show dashboard
-            showScreen('home-screen');
+        } else {
+            // Business exists - ensure dashboard is showing
+            const currentScreen = document.querySelector('.screen.active');
+            if (!currentScreen || currentScreen.id !== 'home-screen') {
+                console.log('[Auth] Business found, showing dashboard');
+                // Hide business setup screen if it was showing
+                const businessSetupScreen = document.getElementById('business-setup-screen');
+                if (businessSetupScreen) {
+                    businessSetupScreen.classList.remove('active');
+                    businessSetupScreen.style.display = 'none';
+                }
+                // Show dashboard
+                showScreen('home-screen');
+            }
             
             // Update UI with business info (non-blocking)
             updateBusinessHeaderSync(business);
             updateNavbarBusinessNameSync(business);
             
             // Load user data (non-blocking, doesn't block UI)
+            // This loads from IndexedDB first, then syncs with Supabase in background
             loadUserData(userId).catch(err => {
                 console.error('[Auth] Error loading user data:', err);
                 // Don't block UI if data loading fails - user can still use the app
@@ -4406,41 +4503,132 @@ async function restoreUserSession(userId) {
         }
     } catch (err) {
         console.error('[Auth] Error restoring session:', err);
-        // On error, check session again
-        const supabase = await getSupabaseAsync();
-        if (supabase) {
-            const { data: { session } } = await supabase.auth.getSession();
-            if (!session || !session.user) {
-                // Not authenticated - show login
-                showScreen('login-screen');
-            } else {
-                // Has session but error fetching business - try cache
-                const cachedBusiness = getCachedBusiness();
-                if (cachedBusiness) {
-                    // Hide auth screens
-                    const loginScreen = document.getElementById('login-screen');
-                    const signupScreen = document.getElementById('signup-screen');
-                    if (loginScreen) {
-                        loginScreen.classList.remove('active');
-                        loginScreen.style.display = 'none';
+        // On error, try to use cached data first (offline-first)
+        const cachedBusiness = getCachedBusiness();
+        if (cachedBusiness) {
+            // Hide auth screens
+            const loginScreen = document.getElementById('login-screen');
+            const signupScreen = document.getElementById('signup-screen');
+            if (loginScreen) {
+                loginScreen.classList.remove('active');
+                loginScreen.style.display = 'none';
+            }
+            if (signupScreen) {
+                signupScreen.classList.remove('active');
+                signupScreen.style.display = 'none';
+            }
+            // Show dashboard with cached business
+            showScreen('home-screen');
+            updateBusinessHeaderSync(cachedBusiness);
+            updateNavbarBusinessNameSync(cachedBusiness);
+            // Load cached data
+            loadUserData(userId).catch(loadErr => {
+                console.warn('[Auth] Error loading cached user data:', loadErr);
+            });
+        } else if (isOnline()) {
+            // Only check Supabase session if online
+            try {
+                const supabase = await getSupabaseAsync();
+                if (supabase) {
+                    const { data: { session } } = await supabase.auth.getSession();
+                    if (!session || !session.user) {
+                        // Not authenticated - show login
+                        showScreen('login-screen');
+                    } else {
+                        // Has session but error fetching business - show business setup
+                        showScreen('business-setup-screen');
                     }
-                    if (signupScreen) {
-                        signupScreen.classList.remove('active');
-                        signupScreen.style.display = 'none';
-                    }
-                    // Show dashboard with cached business
-                    showScreen('home-screen');
-                    updateBusinessHeaderSync(cachedBusiness);
-                    updateNavbarBusinessNameSync(cachedBusiness);
                 } else {
-                    // No cached business - show business setup (authenticated user needs to complete setup)
+                    // No Supabase - show business setup
                     showScreen('business-setup-screen');
                 }
+            } catch (sessionErr) {
+                console.warn('[Auth] Error checking session:', sessionErr);
+                // Show login as fallback
+                showScreen('login-screen');
             }
         } else {
-            showScreen('login-screen');
+            // Offline and no cached business - show business setup
+            showScreen('business-setup-screen');
         }
     }
+}
+
+// Check for cached session in localStorage (offline-safe)
+// Explicit session cache key
+const CACHED_SESSION_KEY = 'measurement_vault_cached_session';
+
+// Cache session explicitly (called on login/signup)
+function cacheSession(session) {
+    if (!session || !session.user) return;
+    try {
+        const sessionData = {
+            user: session.user,
+            access_token: session.access_token,
+            expires_at: session.expires_at,
+            cached_at: Date.now()
+        };
+        localStorage.setItem(CACHED_SESSION_KEY, JSON.stringify(sessionData));
+        console.log('[Auth] Session cached for offline use');
+    } catch (err) {
+        console.warn('[Auth] Error caching session:', err);
+    }
+}
+
+// Clear cached session (called on explicit logout)
+function clearCachedSession() {
+    try {
+        localStorage.removeItem(CACHED_SESSION_KEY);
+        console.log('[Auth] Cached session cleared');
+    } catch (err) {
+        console.warn('[Auth] Error clearing cached session:', err);
+    }
+}
+
+function getCachedSession() {
+    try {
+        // First check explicit cache
+        const explicitCache = localStorage.getItem(CACHED_SESSION_KEY);
+        if (explicitCache) {
+            try {
+                const parsed = JSON.parse(explicitCache);
+                if (parsed && parsed.user) {
+                    return {
+                        user: parsed.user,
+                        access_token: parsed.access_token
+                    };
+                }
+            } catch (e) {
+                // Invalid JSON, try Supabase cache
+            }
+        }
+        
+        // Fallback to Supabase's localStorage cache
+        const keys = Object.keys(localStorage);
+        const authKey = keys.find(key => key.includes('auth-token') && key.includes('supabase'));
+        if (authKey) {
+            const authData = localStorage.getItem(authKey);
+            if (authData) {
+                try {
+                    const parsed = JSON.parse(authData);
+                    // Check if session exists and has user
+                    if (parsed && parsed.currentSession && parsed.currentSession.user) {
+                        // Also cache it explicitly for future use
+                        cacheSession(parsed.currentSession);
+                        return {
+                            user: parsed.currentSession.user,
+                            access_token: parsed.currentSession.access_token
+                        };
+                    }
+                } catch (e) {
+                    // Invalid JSON, ignore
+                }
+            }
+        }
+    } catch (err) {
+        console.warn('[Init] Error reading cached session:', err);
+    }
+    return null;
 }
 
 function initializeApp() {
@@ -4477,99 +4665,148 @@ function initializeApp() {
     // Setup authentication form handlers (but don't show screens yet)
     setupAuthForms();
     
-    // CRITICAL: Set up timeout failsafe - if auth hasn't resolved in 5 seconds, proceed as unauthenticated
-    authTimeoutId = setTimeout(() => {
+    // CRITICAL: Hard timeout for loading screen - ALWAYS show UI after this
+    const loadingTimeoutId = setTimeout(() => {
+        console.log('[Init] Loading screen timeout - forcing UI to show');
+        hideLoadingScreen();
+        if (loadingScreen) loadingScreen.style.display = 'none';
+        // If auth not ready yet, show login screen
         if (!authReady) {
-            console.warn('[Init] Auth timeout - proceeding as unauthenticated');
-            authReady = true;
-            hideLoadingScreen();
-            if (loadingScreen) loadingScreen.style.display = 'none';
             showScreen('login-screen');
         }
-    }, AUTH_TIMEOUT_MS);
+    }, LOADING_SCREEN_TIMEOUT_MS);
     
-    // Wait for Supabase to be initialized, then check auth BEFORE showing any screen
-    (async function() {
-        try {
-            console.log('[Init] Waiting for Supabase...');
-            // Wait for Supabase client to be ready
-            const supabase = await getSupabaseAsync();
+    // CRITICAL: Check cached session FIRST (offline-safe, no network required)
+    const cachedSession = getCachedSession();
+    if (cachedSession && cachedSession.user) {
+        console.log('[Init] Found cached session for:', cachedSession.user.email);
+        
+        // Load local data FIRST (cache + IndexedDB) - this is fast and doesn't require network
+        const cachedBusiness = getCachedBusiness();
+        
+        // IMMEDIATELY clear loading screen after local data check
+        authReady = true;
+        clearTimeout(loadingTimeoutId);
+        hideLoadingScreen();
+        if (loadingScreen) loadingScreen.style.display = 'none';
+        
+        // Show UI immediately based on cached data
+        if (cachedBusiness) {
+            // We have cached business - show dashboard immediately
+            console.log('[Init] Found cached business, showing dashboard');
+            showScreen('home-screen');
+            updateBusinessHeaderSync(cachedBusiness);
+            updateNavbarBusinessNameSync(cachedBusiness);
             
-            if (!supabase) {
-                console.error('[Init] Supabase client failed to initialize');
-                // Auth ready (even though failed) - we know the state (unauthenticated)
-                if (!authReady) {
-                    authReady = true;
-                    if (authTimeoutId) clearTimeout(authTimeoutId);
-                    hideLoadingScreen();
-                    if (loadingScreen) loadingScreen.style.display = 'none';
-                    showToast('Unable to connect to database. Please check your connection.', 'error', 5000);
-                    showScreen('login-screen');
+            // Load local data from IndexedDB (non-blocking)
+            (async function() {
+                try {
+                    await restoreUserSession(cachedSession.user.id);
+                } catch (err) {
+                    console.warn('[Init] Error restoring session:', err);
+                    // UI already shown, continue with cached data
                 }
-                return;
-            }
-            
-            // Setup auth state change listener for session persistence
-            setupAuthStateListener();
-            
-            console.log('[Init] Supabase ready, checking auth session...');
-            // Check authentication status - Supabase automatically restores session from localStorage
-            const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-            
-            // CRITICAL: Auth state is now known - set authReady IMMEDIATELY (before any data loading)
-            authReady = true;
-            if (authTimeoutId) clearTimeout(authTimeoutId);
-            
-            if (sessionError) {
-                console.error('[Init] Session error:', sessionError);
-                // Auth state known (error = unauthenticated) - hide loader immediately
-                hideLoadingScreen();
-                if (loadingScreen) loadingScreen.style.display = 'none';
-                showScreen('login-screen');
-            return;
+            })();
+        } else {
+            // No cached business - show business setup
+            console.log('[Init] No cached business, showing business setup');
+            showScreen('business-setup-screen');
         }
         
-            if (!session || !session.user) {
-                console.log('[Init] No active session, showing login screen');
-                // Auth state known (no session = unauthenticated) - hide loader immediately
-                hideLoadingScreen();
-                if (loadingScreen) loadingScreen.style.display = 'none';
-                showScreen('login-screen');
-                return;
-            }
-            
-            console.log('[Init] User authenticated:', session.user.email);
-            // Auth state known (authenticated) - hide loader IMMEDIATELY before data loading
-            hideLoadingScreen();
-            if (loadingScreen) loadingScreen.style.display = 'none';
-            
-            // User is authenticated - restore their session and route correctly
-            // Do NOT wait for this to complete - it's non-blocking
-            // Do NOT show login/business-setup screens - go straight to dashboard if authenticated
-            restoreUserSession(session.user.id).catch(err => {
-                console.error('[Init] Error restoring user session:', err);
-                // If restore fails, still show login (user can try again)
-                showScreen('login-screen');
-            });
-            
-        } catch (err) {
-            console.error('[Init] Error during app initialization:', err);
-            // Auth state known (error = unauthenticated) - hide loader immediately
-            if (!authReady) {
-                authReady = true;
-                if (authTimeoutId) clearTimeout(authTimeoutId);
-            }
-            hideLoadingScreen();
-            if (loadingScreen) loadingScreen.style.display = 'none';
-            // On error, show login screen
-            showScreen('login-screen');
-        } finally {
-            // Setup all form listeners after screens are shown
-            console.log('[Init] Setting up form listeners...');
-            setupBusinessFormListener();
-            // Other form listeners are set up inline where needed
+        // Verify session with Supabase in background (non-blocking, doesn't affect UI)
+        // ONLY if online - skip verification when offline
+        // CRITICAL: Never show login screen if we have cached session - UI already shown
+        if (isOnline()) {
+            (async function() {
+                try {
+                    const supabase = await getSupabaseAsync();
+                    if (supabase) {
+                        setupAuthStateListener();
+                        // Verify session (non-blocking)
+                        try {
+                            const { data: { session } } = await supabase.auth.getSession();
+                            if (session && session.user) {
+                                // Valid session - cache it
+                                cacheSession(session);
+                            }
+                            // Never show login if we have cached session - user is already logged in
+                        } catch (sessionErr) {
+                            console.warn('[Init] Session check failed (non-fatal):', sessionErr);
+                            // Continue with cached session - UI already shown
+                        }
+                    }
+                } catch (err) {
+                    console.warn('[Init] Error verifying session:', err);
+                    // Continue with cached session if offline - UI already shown
+                }
+            })();
+        } else {
+            console.log('[Init] Offline - skipping session verification, using cached session');
+            // Still setup auth listener for when we come back online
+            setupAuthStateListener();
         }
-    })();
+        return;
+    }
+    
+    // No cached session - show login screen immediately
+    console.log('[Init] No cached session found');
+    authReady = true;
+    clearTimeout(loadingTimeoutId);
+    hideLoadingScreen();
+    if (loadingScreen) loadingScreen.style.display = 'none';
+    showScreen('login-screen');
+    
+    // Verify with Supabase in background (non-blocking, doesn't block UI)
+    // ONLY if online - skip when offline
+    if (isOnline()) {
+        (async function() {
+            try {
+                console.log('[Init] Verifying auth in background...');
+                const supabase = await getSupabaseAsync();
+                
+                if (!supabase) {
+                    console.warn('[Init] Supabase not available - continuing offline');
+                    return;
+                }
+                
+                // Setup auth state change listener
+                setupAuthStateListener();
+                
+                // Check session (non-blocking)
+                const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+                
+                if (sessionError) {
+                    console.warn('[Init] Session check error:', sessionError);
+                    return;
+                }
+                
+                if (session && session.user) {
+                    console.log('[Init] Valid session found, caching and restoring...');
+                    // Cache session explicitly
+                    cacheSession(session);
+                    // Clear logout flag
+                    localStorage.removeItem(LOGOUT_STATE_KEY);
+                    // User is authenticated - restore their session (non-blocking)
+                    restoreUserSession(session.user.id).catch(err => {
+                        console.warn('[Init] Error restoring session:', err);
+                    });
+                }
+            } catch (err) {
+                console.warn('[Init] Error during background auth check:', err);
+                // Continue offline - UI already shown
+            } finally {
+                // Setup all form listeners
+                console.log('[Init] Setting up form listeners...');
+                setupBusinessFormListener();
+            }
+        })();
+    } else {
+        console.log('[Init] Offline - skipping auth verification, using cached session');
+        // Still setup auth listener for when we come back online
+        setupAuthStateListener();
+        // Setup form listeners
+        setupBusinessFormListener();
+    }
 }
 
 // Setup authentication form handlers
@@ -4662,6 +4899,12 @@ function setupAuthForms() {
                     }
                 } else {
                     // Email might be auto-confirmed (if Supabase settings allow)
+                    if (data.session) {
+                        // Cache session explicitly for offline use
+                        cacheSession(data.session);
+                        // Clear logout flag
+                        localStorage.removeItem(LOGOUT_STATE_KEY);
+                    }
                     if (successDiv) {
                         successDiv.textContent = 'Account created successfully! Redirecting...';
                         successDiv.style.display = 'block';
@@ -4756,8 +4999,14 @@ function setupAuthForms() {
                     return;
                 }
                 
-                // Login successful - restore session and route correctly
-                console.log('[Login] Login successful, restoring session...');
+                // Login successful - cache session and restore
+                console.log('[Login] Login successful, caching session and restoring...');
+                if (data.session) {
+                    // Cache session explicitly for offline use
+                    cacheSession(data.session);
+                    // Clear logout flag
+                    localStorage.removeItem(LOGOUT_STATE_KEY);
+                }
                 if (data.user) {
                     await restoreUserSession(data.user.id);
                 } else {
@@ -5063,26 +5312,43 @@ function setupAuthForms() {
 }
 
 // Get business for user (one business per user)
+// NOTE: Only call this when online - always check cache first
 async function getBusinessForUser(userId) {
+    // Do NOT query Supabase if offline
+    if (!isOnline()) {
+        console.warn('[getBusinessForUser] Offline - cannot fetch from Supabase');
+        return null;
+    }
+    
     const supabase = await getSupabaseAsync();
     if (!supabase) return null;
     
-    const { data, error } = await supabase
-        .from('businesses')
-        .select('*')
-        .eq('user_id', userId)
-        .limit(1)
-        .single();
-    
-    if (error || !data) return null;
-    
-    return {
-        id: data.id,
-        name: data.name,
-        email: data.email || null,
-        phone: data.phone,
-        createdAt: data.created_at
-    };
+    try {
+        const { data, error } = await supabase
+            .from('businesses')
+            .select('*')
+            .eq('user_id', userId)
+            .limit(1)
+            .single();
+        
+        if (error) {
+            console.warn('[getBusinessForUser] Supabase query error:', error);
+            return null;
+        }
+        
+        if (!data) return null;
+        
+        return {
+            id: data.id,
+            name: data.name,
+            email: data.email || null,
+            phone: data.phone,
+            createdAt: data.created_at
+        };
+    } catch (err) {
+        console.warn('[getBusinessForUser] Network error:', err);
+        return null;
+    }
 }
 
 // Load user data (clients and measurements) - LOCAL-FIRST with strict load order
@@ -5104,23 +5370,44 @@ async function loadUserData(userId) {
         }
         
         // Step 2: Load business (required for business_id)
-        const business = await getBusinessForUser(userId);
+        // ALWAYS check cache FIRST, only query Supabase if online
+        let business = getCachedBusiness();
+        
+        // Only query Supabase if online and no cached business
+        if (isOnline() && !business) {
+            try {
+                const fetchedBusiness = await getBusinessForUser(userId);
+                if (fetchedBusiness) {
+                    business = fetchedBusiness;
+                    setCachedBusiness(business);
+                }
+            } catch (err) {
+                console.warn('[LoadData] Could not fetch business:', err);
+                // Continue with cached business if available
+            }
+        }
+        
         if (business) {
             updateBusinessHeaderSync(business);
             updateNavbarBusinessNameSync(business);
             console.log('[LoadData] Business loaded:', business.name);
         } else {
-            console.warn('[LoadData] No business found for user');
-            return; // Cannot proceed without business
+            console.warn('[LoadData] No business found (checking cache first)');
+            // Try cache one more time as fallback
+            const cachedBusiness = getCachedBusiness();
+            if (cachedBusiness) {
+                business = cachedBusiness;
+                updateBusinessHeaderSync(business);
+                updateNavbarBusinessNameSync(business);
+                console.log('[LoadData] Using cached business:', business.name);
+            } else {
+                return; // Cannot proceed without business
+            }
         }
         
-        // Step 3: Seed IndexedDB from Supabase on first load (one-time migration)
-        // This must happen BEFORE loading clients/measurements
-        await seedIndexedDBFromSupabase(userId);
-        console.log('[LoadData] IndexedDB seeding complete');
-        
-        // Step 4: Load clients FIRST (measurements depend on clients)
-        console.log('[LoadData] Loading clients...');
+        // Step 3: Load clients FIRST from IndexedDB (local data, fast, non-blocking)
+        // This happens BEFORE Supabase sync - UI renders immediately with local data
+        console.log('[LoadData] Loading clients from IndexedDB...');
         const clients = await getClients(true);
         if (!Array.isArray(clients)) {
             console.error('[LoadData] Failed to load clients');
@@ -5128,14 +5415,21 @@ async function loadUserData(userId) {
         }
         console.log('[LoadData] Clients loaded:', clients.length);
         
-        // Step 5: Load measurements AFTER clients are loaded
-        console.log('[LoadData] Loading measurements...');
+        // Step 4: Load measurements from IndexedDB (local data, fast, non-blocking)
+        console.log('[LoadData] Loading measurements from IndexedDB...');
         const measurements = await getMeasurements(true);
         if (!Array.isArray(measurements)) {
             console.error('[LoadData] Failed to load measurements');
             return;
         }
         console.log('[LoadData] Measurements loaded:', measurements.length);
+        
+        // Step 5: Seed IndexedDB from Supabase in BACKGROUND (non-blocking)
+        // This runs AFTER local data is loaded - doesn't block UI
+        // Only runs if online and IndexedDB is empty
+        seedIndexedDBFromSupabase(userId).catch(err => {
+            console.warn('[LoadData] Background seed failed (non-fatal):', err);
+        });
         
         // Step 6: Start background sync (silent) - only after data is loaded
         if (window.syncManager && window.indexedDBHelper) {
@@ -5159,8 +5453,15 @@ async function loadUserData(userId) {
 }
 
 // Seed IndexedDB from Supabase (one-time migration on first load)
+// NOTE: Only runs when online - uses cached data when offline
 async function seedIndexedDBFromSupabase(userId) {
     if (!window.indexedDBHelper) return;
+    
+    // Do NOT query Supabase if offline
+    if (!isOnline()) {
+        console.log('[Migration] Offline - skipping Supabase seed, using local data');
+        return;
+    }
     
     try {
         // Check if IndexedDB already has data
@@ -5172,7 +5473,7 @@ async function seedIndexedDBFromSupabase(userId) {
             return; // Already seeded
         }
         
-        // Fetch from Supabase
+        // Fetch from Supabase (only if online)
         const supabase = await getSupabaseAsync();
         if (!supabase) return;
         
@@ -5180,10 +5481,15 @@ async function seedIndexedDBFromSupabase(userId) {
         if (!business) return;
         
         // Fetch clients from Supabase
-        const { data: clientsData } = await supabase
+        const { data: clientsData, error: clientsError } = await supabase
             .from('clients')
             .select('*')
             .eq('user_id', userId);
+        
+        if (clientsError) {
+            console.warn('[Migration] Error fetching clients:', clientsError);
+            return;
+        }
         
         if (clientsData && clientsData.length > 0) {
             for (const client of clientsData) {
@@ -5199,10 +5505,15 @@ async function seedIndexedDBFromSupabase(userId) {
         }
         
         // Fetch measurements from Supabase
-        const { data: measurementsData } = await supabase
+        const { data: measurementsData, error: measurementsError } = await supabase
             .from('measurements')
             .select('*')
             .eq('user_id', userId);
+        
+        if (measurementsError) {
+            console.warn('[Migration] Error fetching measurements:', measurementsError);
+            return;
+        }
         
         if (measurementsData && measurementsData.length > 0) {
             for (const measurement of measurementsData) {
@@ -5234,13 +5545,34 @@ async function seedIndexedDBFromSupabase(userId) {
 }
 
 // Get current authenticated user
+// NOTE: When offline, returns null to avoid network calls
 async function getCurrentUser() {
+    // Do NOT call Supabase auth when offline
+    if (!isOnline()) {
+        // Try to get user from cached session
+        const cachedSession = getCachedSession();
+        if (cachedSession && cachedSession.user) {
+            return cachedSession.user;
+        }
+        return null;
+    }
+    
     const supabase = await getSupabaseAsync();
     if (!supabase) return null;
     
-    const { data: { user }, error } = await supabase.auth.getUser();
-    if (error || !user) return null;
-    return user;
+    try {
+        const { data: { user }, error } = await supabase.auth.getUser();
+        if (error || !user) return null;
+        return user;
+    } catch (err) {
+        console.warn('[getCurrentUser] Network error:', err);
+        // Fallback to cached session
+        const cachedSession = getCachedSession();
+        if (cachedSession && cachedSession.user) {
+            return cachedSession.user;
+        }
+        return null;
+    }
 }
 
 // Get clients (updated to use user_id)

@@ -8,6 +8,12 @@ const STATIC_ASSETS = [
   '/manifest.json',
   '/icon-192.png',
   '/icon-512.png',
+  '/app.js',
+  '/indexeddb.js',
+  '/sync-manager.js',
+  '/styles.css',
+  '/auth-header.jpg',
+  '/auth-header.jpeg',
   'https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap'
 ];
 
@@ -19,13 +25,26 @@ self.addEventListener('install', (event) => {
       console.log('[Service Worker] Caching static assets');
       return Promise.allSettled(
         STATIC_ASSETS.map(url => {
-          return fetch(url).then(response => {
-            if (response.ok) {
-              return cache.put(url, response);
-            }
-          }).catch(err => {
-            console.warn(`[Service Worker] Failed to cache ${url}:`, err);
-          });
+          // Skip external URLs that might fail
+          if (url.startsWith('http') && !url.startsWith(self.location.origin)) {
+            return fetch(url).then(response => {
+              if (response.ok) {
+                return cache.put(url, response);
+              }
+            }).catch(err => {
+              console.warn(`[Service Worker] Failed to cache ${url}:`, err);
+            });
+          } else {
+            // For same-origin URLs, use relative path
+            const requestUrl = url.startsWith('/') ? url : `/${url}`;
+            return fetch(requestUrl).then(response => {
+              if (response.ok) {
+                return cache.put(requestUrl, response);
+              }
+            }).catch(err => {
+              console.warn(`[Service Worker] Failed to cache ${requestUrl}:`, err);
+            });
+          }
         })
       ).then(() => {
         console.log('[Service Worker] Static assets cached');
@@ -59,14 +78,30 @@ self.addEventListener('activate', (event) => {
 // Fetch event - serve from cache, fallback to network
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
+  const request = event.request;
+  
+  // Skip chrome-extension:// and other unsupported protocols
+  if (url.protocol === 'chrome-extension:' || 
+      url.protocol === 'chrome:' ||
+      url.protocol === 'moz-extension:') {
+    return; // Let browser handle it
+  }
   
   // DO NOT cache Supabase API requests
   if (url.hostname.includes('supabase.co') || 
       url.hostname.includes('supabase') ||
       url.pathname.includes('/rest/v1/') ||
       url.pathname.includes('/auth/v1/')) {
-    // Always fetch from network for Supabase requests
-    event.respondWith(fetch(event.request));
+    // Always fetch from network for Supabase requests (but don't block if offline)
+    event.respondWith(
+      fetch(request).catch(() => {
+        // If offline, return a basic response to prevent blocking
+        return new Response(JSON.stringify({ error: 'Offline' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      })
+    );
     return;
   }
   
@@ -74,7 +109,40 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.includes('/auth/') || 
       url.searchParams.has('access_token') ||
       url.searchParams.has('refresh_token')) {
-    event.respondWith(fetch(event.request));
+    event.respondWith(
+      fetch(request).catch(() => {
+        return new Response('', { status: 503 });
+      })
+    );
+    return;
+  }
+  
+  // For navigation requests (HTML), use cache-first for offline support
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      caches.match(request).then((cachedResponse) => {
+        // Return cached version if available (offline support)
+        if (cachedResponse) {
+          return cachedResponse;
+        }
+        // Otherwise fetch from network
+        return fetch(request).then((response) => {
+          // Cache the response for offline use
+          if (response && response.status === 200) {
+            const responseToCache = response.clone();
+            caches.open(STATIC_CACHE_NAME).then((cache) => {
+              cache.put(request, responseToCache);
+            });
+          }
+          return response;
+        }).catch(() => {
+          // If offline and no cache, return a basic HTML response
+          return new Response('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Offline</title></head><body><h1>You are offline</h1><p>Please check your connection.</p></body></html>', {
+            headers: { 'Content-Type': 'text/html' }
+          });
+        });
+      })
+    );
     return;
   }
   
@@ -118,16 +186,13 @@ self.addEventListener('fetch', (event) => {
           
           return response;
         }).catch(() => {
-          // If network fails and we have a cached version, return it
-          // Otherwise return a basic offline page if it's a navigation request
-          if (event.request.mode === 'navigate') {
-            return caches.match('/');
-          }
+          // If network fails and no cache, return empty response to prevent blocking
+          return new Response('', { status: 503 });
         });
       })
     );
   } else {
-    // For other requests (HTML, etc.), try network first, fallback to cache
+    // For other requests, try network first, fallback to cache
     event.respondWith(
       fetch(event.request).catch(() => {
         return caches.match(event.request).then((cachedResponse) => {
@@ -138,6 +203,7 @@ self.addEventListener('fetch', (event) => {
           if (event.request.mode === 'navigate') {
             return caches.match('/');
           }
+          return new Response('', { status: 503 });
         });
       })
     );
