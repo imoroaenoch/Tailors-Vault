@@ -100,6 +100,31 @@ body {
     padding: 0 20px 20px 20px; /* Add padding only to list */
 }
 
+/* Search screen - full width, no centering (match clients screen) */
+#search-screen .container {
+    max-width: 100%; /* Remove width constraint */
+    margin: 0; /* Remove centering */
+    padding: 0; /* Remove all padding */
+    width: 100%; /* Full width */
+}
+
+/* Search screen header - add padding only to header */
+#search-screen .screen-header {
+    padding: 20px 20px 12px 20px; /* Add padding only to header */
+    margin-bottom: 0;
+}
+
+/* Search box - add padding */
+#search-screen .search-box {
+    padding: 0 20px 16px 20px; /* Add padding to search box */
+    margin-bottom: 0;
+}
+
+/* Search results - full width, with padding (match clients list) */
+#search-screen .search-results {
+    padding: 0 20px 20px 20px; /* Add padding only to results */
+}
+
 /* Compact screen padding (matching new-measurement-screen) */
 .screen {
     padding-top: 32px;
@@ -109,7 +134,7 @@ body {
 /* New Measurement Form Container - Centered, not full width */
 #new-measurement-screen .measurement-form-container {
     max-width: 600px;
-    margin: 0 auto;
+    margin: 0px 0px;
 }
 
 /* New Measurement Screen - Base Compact Styles */
@@ -493,7 +518,7 @@ body {
 }
 
 /* Responsive adjustments for mobile */
-@media (max-width: 480px) {
+@media (max-width: 1280px) {
     .top-navbar {
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
     }
@@ -777,7 +802,7 @@ body {
     }
 
     /* Mobile Responsive */
-    @media (max-width: 480px) {
+    @media (max-width: 1280px) {
         .dashboard-welcome {
             margin-top: 20px;
             margin-bottom: 16px;
@@ -1466,42 +1491,14 @@ textarea {
 .search-results {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px; /* Match clients-list gap */
+    /* Match clients-list styling */
+    flex: 1; /* Take remaining space in flex container */
+    min-height: 0; /* Allow flex item to shrink */
 }
 
-.client-card {
-    background-color: var(--bg-card);
-    border-radius: 12px;
-    padding: 18px;
-    cursor: pointer;
-    transition: border-color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast), background-color var(--transition-medium);
-    border: 1px solid var(--border-color);
-    box-shadow: var(--shadow-sm);
-}
-
-.client-card:hover {
-    border-color: var(--accent-yellow);
-    box-shadow: var(--shadow-md);
-    transform: translateY(-1px);
-}
-
-.client-card:active {
-    transform: translateY(0);
-    opacity: 0.9;
-}
-
-.client-name {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 6px;
-    line-height: 1.4;
-}
-
-.client-phone {
-    font-size: 14px;
-    color: var(--text-secondary);
-}
+/* Search results now use .client-leaderboard-card - same structure as client list */
+/* All styles are already defined in .client-leaderboard-card above */
 
 .no-results {
     text-align: center;

@@ -2437,18 +2437,49 @@ async function renderSearchResults(query) {
         return;
     }
     
-    resultsContainer.innerHTML = clients.map(client => `
-        <div class="client-card" data-client-id="${client.id}">
-            <div class="client-name">${escapeHtml(client.name)}</div>
-            ${client.phone ? `<div class="client-phone">${escapeHtml(client.phone)}</div>` : ''}
-            <div class="client-phone" style="margin-top: 8px; color: #4a5568;">
-                ${client.measurementCount} measurement${client.measurementCount !== 1 ? 's' : ''}
+    resultsContainer.innerHTML = clients.map((client, index) => {
+        // Get initials from client name (same as client list)
+        const getInitials = (name) => {
+            const parts = name.trim().split(/\s+/);
+            if (parts.length >= 2) {
+                return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+            }
+            return name.substring(0, 2).toUpperCase();
+        };
+        const initials = getInitials(client.name);
+        
+        // Secondary text: measurement count or phone
+        const secondaryText = client.measurementCount > 0 
+            ? `${client.measurementCount} measurement${client.measurementCount !== 1 ? 's' : ''}`
+            : (client.phone || 'No measurements');
+        
+        return `
+            <div class="client-leaderboard-card" data-client-id="${client.id}">
+                <div class="client-card-index">
+                    <span class="client-index-badge">${index + 1}</span>
+                </div>
+                <div class="client-card-main">
+                    <div class="client-avatar">
+                        <span class="client-avatar-initials">${initials}</span>
+                    </div>
+                    <div class="client-card-info">
+                        <div class="client-card-name">${escapeHtml(client.name)}</div>
+                        <div class="client-card-secondary">${escapeHtml(secondaryText)}</div>
+                    </div>
+                </div>
+                <div class="client-card-right">
+                    <div class="client-card-badge">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M9 18l6-6-6-6"></path>
+                        </svg>
+                    </div>
+                </div>
             </div>
-        </div>
-    `).join('');
+        `;
+    }).join('');
     
-    // Add click listeners to client cards
-    resultsContainer.querySelectorAll('.client-card').forEach(card => {
+    // Add click listeners to client cards (same as client list)
+    resultsContainer.querySelectorAll('.client-leaderboard-card').forEach(card => {
         card.addEventListener('click', async () => {
             const clientId = card.getAttribute('data-client-id');
             await showClientDetails(clientId, 'search-screen');
