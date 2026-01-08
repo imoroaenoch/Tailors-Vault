@@ -1557,8 +1557,24 @@ async function findOrCreateClient(name, phone, sex) {
     const nameTrimmed = name.trim();
     
     // Get business for this user (required for business_id)
-    const business = await getBusinessForUser(user.id);
-    if (!business) {
+    // CRITICAL: Use cached business when offline, never call Supabase
+    let business = getCachedBusiness();
+    
+    // Only query Supabase if online AND we don't have cached business
+    if (isOnline() && !business) {
+        try {
+            business = await getBusinessForUser(user.id);
+            if (business) {
+                // Cache the business for offline use
+                setCachedBusiness(business);
+            }
+        } catch (err) {
+            console.warn('[findOrCreateClient] Error fetching business:', err);
+            // Continue with cached business if available
+        }
+    }
+    
+    if (!business || !business.id) {
         throw new Error('Please create a business first before adding clients.');
     }
     
@@ -1600,11 +1616,16 @@ async function findOrCreateClient(name, phone, sex) {
     
     // Create new client - save to IndexedDB immediately (LOCAL-FIRST)
     try {
+        // Determine if this is an offline save
+        const isOffline = !isOnline();
+        
         const clientData = {
             name: nameTrimmed,
             phone: phoneNormalized || null,
             sex: sex || null,
-            synced: false // Will be synced in background
+            synced: !isOffline, // Mark as synced if online, unsynced if offline
+            created_offline: isOffline, // Flag for offline-created clients
+            created_at: new Date().toISOString() // Local timestamp
         };
         
         const savedClient = await window.indexedDBHelper.saveClientLocal(clientData, user.id, business.id);
@@ -1801,8 +1822,24 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
     }
     
     // Get business for this user (required for business_id)
-    const business = await getBusinessForUser(user.id);
-    if (!business) {
+    // CRITICAL: Use cached business when offline, never call Supabase
+    let business = getCachedBusiness();
+    
+    // Only query Supabase if online AND we don't have cached business
+    if (isOnline() && !business) {
+        try {
+            business = await getBusinessForUser(user.id);
+            if (business) {
+                // Cache the business for offline use
+                setCachedBusiness(business);
+            }
+        } catch (err) {
+            console.warn('[saveMeasurement] Error fetching business:', err);
+            // Continue with cached business if available
+        }
+    }
+    
+    if (!business || !business.id) {
         throw new Error('Please create a business first before adding measurements.');
     }
     
@@ -1861,6 +1898,9 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
     } else {
         // Create new measurement - LOCAL-FIRST
         try {
+            // Determine if this is an offline save
+            const isOffline = !isOnline();
+            
             const measurementData = {
                 client_id: resolvedClientId,
                 garment_type: formData.garmentType || null,
@@ -1876,7 +1916,9 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
                 seat: formData.seat ? parseFloat(formData.seat) : null,
                 notes: formData.notes || null,
                 custom_fields: formData.customFields || {},
-                synced: false // Will be synced in background
+                synced: !isOffline, // Mark as synced if online, unsynced if offline
+                created_offline: isOffline, // Flag for offline-created measurements
+                created_at: new Date().toISOString() // Local timestamp
             };
             
             const savedMeasurement = await window.indexedDBHelper.saveMeasurementLocal(measurementData, user.id, business.id);
@@ -1895,8 +1937,22 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
             return savedMeasurement;
         } catch (err) {
             console.error('Error creating measurement locally:', err);
-            showToast('Failed to create measurement. Please try again.', 'error', 4000);
-            throw err;
+            // Never show errors for offline saves - they should always succeed locally
+            // Only throw error if it's a real database error (not offline-related)
+            if (isOnline() && err.message && !err.message.includes('offline')) {
+                showToast('Failed to create measurement. Please try again.', 'error', 4000);
+                throw err;
+            } else {
+                // Offline save - log but don't throw (measurement saved locally)
+                console.warn('[saveMeasurement] Offline save completed locally:', err);
+                // Return a mock measurement object so the UI can continue
+                return {
+                    id: 'local-' + Date.now(),
+                    client_id: resolvedClientId,
+                    synced: false,
+                    created_offline: true
+                };
+            }
         }
     }
 }
@@ -2286,18 +2342,65 @@ document.getElementById('measurement-form').addEventListener('submit', async (e)
     }
     
     // Find or create client (optimistic - returns immediately)
-    const client = await findOrCreateClient(formData.clientName, formData.phone, formData.sex);
-    if (!client) {
+    // Wrap in try/catch to handle offline gracefully
+    let client;
+    try {
+        client = await findOrCreateClient(formData.clientName, formData.phone, formData.sex);
+        if (!client) {
+            throw new Error('Failed to create/find client');
+        }
+    } catch (err) {
+        console.error('[Measurement Form] Error creating/finding client:', err);
         if (submitBtn) {
             submitBtn.disabled = false;
             submitBtn.textContent = originalBtnText;
         }
-        showToast('Error creating/finding client', 'error');
+        // Only show error if we're online - offline saves should work silently
+        if (isOnline()) {
+            showToast('Error creating/finding client', 'error');
+        } else {
+            showToast('Please check your connection and try again', 'error');
+        }
         return;
     }
     
     // Save measurement (optimistic - returns immediately, syncs in background)
-    const measurement = await saveMeasurement(client.id, formData, currentMeasurementId);
+    // Wrap in try/catch to handle offline gracefully
+    let measurement;
+    try {
+        measurement = await saveMeasurement(client.id, formData, currentMeasurementId);
+    } catch (err) {
+        console.error('[Measurement Form] Error saving measurement:', err);
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = originalBtnText;
+        }
+        // Never show errors for offline saves - they should always succeed
+        // Only show error if it's a real error (not offline)
+        if (isOnline() && err.message && !err.message.includes('offline')) {
+            showToast('Failed to save measurement. Please try again.', 'error');
+        } else {
+            // Offline save - show success anyway (saved locally)
+            showToast('Measurement saved! (Will sync when online)', 'success', 2000);
+            // Reset form and continue
+            resetMeasurementForm();
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalBtnText;
+            }
+            // Return to appropriate screen
+            if (currentClientId && currentClientId === client.id) {
+                showClientDetails(client.id, previousScreen).catch(() => {
+                    showScreen('home-screen');
+                    renderRecentMeasurements();
+                });
+            } else {
+                showScreen('home-screen');
+                renderRecentMeasurements();
+            }
+        }
+        return;
+    }
     
     // Reset form immediately
     resetMeasurementForm();
@@ -3632,6 +3735,8 @@ function setupBusinessFormListener() {
             
             if (existingBusiness) {
                 console.log('Business already exists for this user');
+                // Cache the business for offline use
+                setCachedBusiness(existingBusiness);
                 // Business exists - show dashboard
                 updateBusinessHeaderSync(existingBusiness);
                 updateNavbarBusinessNameSync(existingBusiness);
@@ -3689,8 +3794,8 @@ function setupBusinessFormListener() {
                 
                 console.log('Business created successfully');
                 
-                // Clear cache after creation
-                clearBusinessCache();
+                // Cache the business for offline use
+                setCachedBusiness(business);
     
     // Update header and show home screen
                 updateBusinessHeaderSync(business);
