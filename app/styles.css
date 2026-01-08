@@ -75,14 +75,9 @@ body {
     min-height: 100%;
 }
 
-/* Remove body bottom padding on auth screens only */
-body.auth-screen-active {
-    padding-bottom: 0 !important;
-}
-
 .container {
     max-width: 500px;
-    margin: 0;
+    margin: 10px 5px;
     padding: 24px 28px;
 }
 
@@ -114,7 +109,7 @@ body.auth-screen-active {
 /* New Measurement Form Container - Centered, not full width */
 #new-measurement-screen .measurement-form-container {
     max-width: 600px;
-    margin: 0 ;
+    margin: 0 auto;
 }
 
 /* New Measurement Screen - Base Compact Styles */
@@ -798,8 +793,8 @@ body.auth-screen-active {
         }
 
         .dashboard-action-grid {
-            gap: 12px;
-            margin-bottom: 24px;
+            gap: 10px;
+            margin-bottom: 0px;
         }
 
         .dashboard-action-card {
@@ -1361,7 +1356,7 @@ textarea {
     }
     
     .container {
-        padding: 30px 20px;
+        padding: 10px 20px;
     }
     
     .screen-header {
@@ -2436,7 +2431,7 @@ textarea {
 .settings-content {
     background-color: var(--bg-card);
     border-radius: 12px;
-    padding: 18px ;
+    padding: 18px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
     border: 1px solid var(--border-color);
     transition: background-color 180ms cubic-bezier(0.4, 0, 0.2, 1);
@@ -2583,7 +2578,7 @@ textarea {
     
     /* Add padding to body content to prevent footer overlap */
     body {
-        padding-bottom: 70px;
+        padding-bottom: 72px;
     }
 }
 

@@ -117,9 +117,9 @@ async function getBusiness() {
     
     if (storedBusinessId) {
         // Fetch the specific business by ID and verify it belongs to this device
-        const { data, error } = await supabase
-            .from('businesses')
-            .select('*')
+    const { data, error } = await supabase
+        .from('businesses')
+        .select('*')
             .eq('id', storedBusinessId)
             .eq('device_id', deviceId)
             .single();
@@ -259,8 +259,8 @@ async function updateBusiness(name, email, phone) {
     
     // Email is optional - use null if empty
     const updateData = {
-        name: name.trim(),
-        phone: phone.trim()
+            name: name.trim(),
+            phone: phone.trim()
     };
     
     const emailTrimmed = email.trim();
@@ -1698,7 +1698,7 @@ async function renderRecentMeasurements(resetPagination = true) {
         <div class="recent-item" data-measurement-id="${item.id}" data-client-id="${item.clientId}">
             <div class="recent-item-field">
                 <div class="recent-item-label">Name</div>
-                <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
+            <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
             </div>
             <div class="recent-item-field">
                 <div class="recent-item-label">Garment</div>
@@ -1717,25 +1717,25 @@ async function renderRecentMeasurements(resetPagination = true) {
     const controlContainer = document.getElementById('recent-measurements-control');
     if (controlContainer) {
         let controlHtml = '';
-        
-        // Add "See More" button if not expanded and there are more measurements
-        if (!recentMeasurementsExpanded && result.hasMore) {
+    
+    // Add "See More" button if not expanded and there are more measurements
+    if (!recentMeasurementsExpanded && result.hasMore) {
             controlHtml = `
                 <button id="see-more-measurements-btn" class="recent-control-btn">
                     See more
-                </button>
-            `;
-        }
-        
-        // Add "Collapse" button if expanded
-        if (recentMeasurementsExpanded) {
+            </button>
+        `;
+    }
+    
+    // Add "Collapse" button if expanded
+    if (recentMeasurementsExpanded) {
             controlHtml = `
                 <button id="collapse-measurements-btn" class="recent-control-btn">
-                    Collapse
-                </button>
-            `;
-        }
-        
+                Collapse
+            </button>
+        `;
+    }
+    
         controlContainer.innerHTML = controlHtml;
     }
     
@@ -1790,7 +1790,7 @@ async function renderRecentMeasurements(resetPagination = true) {
                     <div class="recent-item" data-measurement-id="${item.id}" data-client-id="${item.clientId}">
                         <div class="recent-item-field">
                             <div class="recent-item-label">Name</div>
-                            <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
+                        <div class="recent-item-name">${escapeHtml(item.clientName)}</div>
                         </div>
                         <div class="recent-item-field">
                             <div class="recent-item-label">Garment</div>
@@ -2366,20 +2366,20 @@ document.getElementById('business-setup-form').addEventListener('submit', async 
     } else {
         // Business doesn't exist - create new business
         // Business ID will be stored in createBusiness function
-        const business = await createBusiness(name, email, phone);
-        if (!business) {
-            alert('Error creating business. Please check the browser console (F12) for details.');
-            return;
-        }
+    const business = await createBusiness(name, email, phone);
+    if (!business) {
+        alert('Error creating business. Please check the browser console (F12) for details.');
+        return;
+    }
         
         // Log the user in after creating business (clears logout state)
         loginBusiness();
-        
-        // Update header and show home screen
-        await updateBusinessHeader();
+    
+    // Update header and show home screen
+    await updateBusinessHeader();
         await updateNavbarBusinessName();
-        showScreen('home-screen');
-        await renderRecentMeasurements();
+    showScreen('home-screen');
+    await renderRecentMeasurements();
     }
 });
 

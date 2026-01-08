@@ -436,50 +436,10 @@ async function hasBusiness() {
 }
 
 // Get business for current authenticated user (single source of truth)
-// OFFLINE-FIRST: Load from localStorage cache FIRST, then try Supabase in background
 async function getBusiness(useCache = true) {
-    // OFFLINE-FIRST: Always check localStorage cache FIRST (even before in-memory cache)
-    const cachedBusiness = getCachedBusiness();
-    if (cachedBusiness) {
-        // Return cached business immediately (don't wait for Supabase)
-        // Try to fetch fresh data in background (non-blocking)
-        if (isOnline() && useCache) {
-            const user = await getCurrentUser();
-            if (user) {
-                const supabase = await getSupabaseAsync();
-                if (supabase) {
-                    // Try to fetch fresh data in background (silent, non-blocking)
-                    getBusinessForUser(user.id).then(freshBusiness => {
-                        if (freshBusiness) {
-                            // Update cache with fresh data (but don't block UI)
-                            setCachedBusiness(freshBusiness);
-                            businessDataCache = freshBusiness;
-                            businessDataCacheTime = Date.now();
-                            // Update UI silently if needed
-                            updateBusinessHeaderSync(freshBusiness);
-                            updateNavbarBusinessNameSync(freshBusiness);
-                        }
-                    }).catch(() => {
-                        // Silently fail - we already have cached data
-                    });
-                }
-            }
-        }
-        // Update in-memory cache
-        businessDataCache = cachedBusiness;
-        businessDataCacheTime = Date.now();
-        return cachedBusiness;
-    }
-    
-    // No localStorage cache - check in-memory cache
+    // Check cache first
     if (useCache && businessDataCache && (Date.now() - businessDataCacheTime) < BUSINESS_CACHE_DURATION) {
         return businessDataCache;
-    }
-    
-    // No cache - only fetch from Supabase if online
-    if (!isOnline()) {
-        // Offline and no cache - return null (but don't redirect)
-        return null;
     }
     
     const user = await getCurrentUser();
@@ -489,37 +449,33 @@ async function getBusiness(useCache = true) {
     
     const supabase = await getSupabaseAsync();
     if (!supabase) {
-        // Supabase unavailable but no cache - return null (but don't redirect)
         return null;
     }
     
-    try {
-        // Query business by user_id only - NO fallbacks
+    // Query business by user_id only - NO fallbacks
     const { data, error } = await supabase
         .from('businesses')
         .select('*')
-            .eq('user_id', user.id)
+        .eq('user_id', user.id)
         .limit(1)
         .single();
     
-        if (error || !data) {
-            return null;
-        }
+    if (error || !data) {
+        return null;
+    }
     
-        // Return business data
-        const business = {
+    // Return business data
+    const business = {
         id: data.id,
         name: data.name,
-            email: data.email || null,
+        email: data.email || null,
         phone: data.phone,
         createdAt: data.created_at
     };
-        
-        // Cache the result (both in-memory and localStorage)
-        businessDataCache = business;
-        businessDataCacheTime = Date.now();
-        setCachedBusiness(business); // Persist to localStorage
-        
+    
+    // Cache the result
+    businessDataCache = business;
+    businessDataCacheTime = Date.now();
     
     return business;
 }
@@ -1134,8 +1090,6 @@ async function findBusinessByCredentials(name, email, phone) {
         
         // Store the business ID for session tracking
         localStorage.setItem(CURRENT_BUSINESS_ID_KEY, business.id);
-        // Cache business to localStorage for offline access
-        setCachedBusiness(businessObj);
         
         // Convert to match old format
         const businessObj = {
@@ -2039,28 +1993,16 @@ async function updateBusinessHeader() {
 }
 
 // Update business header name (sync - uses provided business object)
-// OFFLINE-FIRST: Always show cached business name, never default to generic name
 function updateBusinessHeaderSync(business) {
     const headerElement = document.getElementById('business-header-name');
     if (headerElement) {
-        // CRITICAL: Always show business name if provided, even if user is "logged out"
-        // Don't reset to default name when offline - preserve last known state
-        if (business && business.name) {
+        if (business && business.name && !isUserLoggedOut()) {
             const businessName = business.name;
             headerElement.textContent = businessName;
             headerElement.setAttribute('title', businessName);
         } else {
-            // Only show default if we truly have no business data
-            // Don't reset to default when offline
-            const cachedBusiness = getCachedBusiness();
-            if (cachedBusiness && cachedBusiness.name) {
-                // Use cached business name instead of default
-                headerElement.textContent = cachedBusiness.name;
-                headerElement.setAttribute('title', cachedBusiness.name);
-        } else {
             headerElement.textContent = 'Measurement Vault';
             headerElement.removeAttribute('title');
-            }
         }
     }
 }
@@ -2072,25 +2014,12 @@ async function updateNavbarBusinessName() {
 }
 
 // Update business name in all navbar instances (sync - uses provided business object)
-// OFFLINE-FIRST: Always show cached business name, never default to generic name
 function updateNavbarBusinessNameSync(business) {
-    // CRITICAL: Always show business name if provided, even if user is "logged out"
-    // Don't reset to default name when offline - preserve last known state
-    let businessName = 'Measurement Vault';
-    
-    if (business && business.name) {
-        businessName = business.name;
-    } else {
-        // If no business provided, check cache (offline-first)
-        const cachedBusiness = getCachedBusiness();
-        if (cachedBusiness && cachedBusiness.name) {
-            businessName = cachedBusiness.name;
-        }
-    }
+    const businessName = (business && business.name && !isUserLoggedOut()) ? business.name : 'Measurement Vault';
     
     document.querySelectorAll('.navbar-business-name').forEach(element => {
         element.textContent = businessName;
-        if (businessName !== 'Measurement Vault') {
+        if (business && business.name) {
             element.setAttribute('title', businessName);
         } else {
             element.removeAttribute('title');
@@ -2110,14 +2039,6 @@ function showScreen(screenId) {
         // Cache screens on first use
         if (!cachedScreens) {
             cachedScreens = Array.from(document.querySelectorAll('.screen'));
-        }
-        
-        // Add/remove body class for auth screens (to remove bottom padding)
-        const isAuthScreen = screenId === 'login-screen' || screenId === 'signup-screen';
-        if (isAuthScreen) {
-            document.body.classList.add('auth-screen-active');
-        } else {
-            document.body.classList.remove('auth-screen-active');
         }
         
         // Use requestAnimationFrame for smooth transitions
@@ -3684,21 +3605,13 @@ function setupBusinessFormListener() {
                 
                 console.log('Business created successfully');
                 
-                // CRITICAL: Cache to localStorage FIRST (offline-first)
-                setCachedBusiness(business);
-                // Store business ID for session tracking
-                localStorage.setItem(CURRENT_BUSINESS_ID_KEY, data.id);
-                // Store user ID for offline restoration
-                localStorage.setItem('measurement_vault_last_user_id', user.id);
-                
-                // Update in-memory cache
-                businessDataCache = business;
-                businessDataCacheTime = Date.now();
+                // Clear cache after creation
+                clearBusinessCache();
     
-                // Update header and show home screen
+    // Update header and show home screen
                 updateBusinessHeaderSync(business);
                 updateNavbarBusinessNameSync(business);
-                showScreen('home-screen');
+    showScreen('home-screen');
                 await loadUserData(user.id);
                 
                 // Re-enable button
@@ -4394,7 +4307,6 @@ function setupAuthStateListener() {
 
 // Restore user session and route to correct screen
 // NOTE: This function is NON-BLOCKING - loader should already be hidden before this is called
-// CRITICAL: Load from cache FIRST, then try Supabase in background (offline-first)
 async function restoreUserSession(userId) {
     try {
         console.log('[Auth] Restoring session for user:', userId);
@@ -4411,79 +4323,37 @@ async function restoreUserSession(userId) {
             signupScreen.style.display = 'none';
         }
         
-        // OFFLINE-FIRST: Load business from cache FIRST (before Supabase)
+        // Check if business exists for this user
+        // Try cache first for offline support (non-blocking)
         let business = getCachedBusiness();
         
-        // If cached business exists, render dashboard IMMEDIATELY (don't wait for Supabase)
-        if (business) {
-            console.log('[Auth] Cached business found, rendering dashboard immediately');
-            // Hide business setup screen if it was showing
-            const businessSetupScreen = document.getElementById('business-setup-screen');
-            if (businessSetupScreen) {
-                businessSetupScreen.classList.remove('active');
-                businessSetupScreen.style.display = 'none';
-            }
-            // Show dashboard immediately
-            showScreen('home-screen');
-            
-            // Update UI with cached business info immediately
-            updateBusinessHeaderSync(business);
-            updateNavbarBusinessNameSync(business);
-            
-            // Load user data from IndexedDB (local-first, non-blocking)
-            loadUserData(userId).catch(err => {
-                console.warn('[Auth] Error loading user data (using cached):', err);
-                // Don't block UI if data loading fails - user can still use the app
-            });
-            
-            // Try to fetch from Supabase in background (non-blocking, doesn't affect UI)
-            if (isOnline()) {
-                getBusinessForUser(userId).then(fetchedBusiness => {
-                    if (fetchedBusiness) {
-                        console.log('[Auth] Background sync: Updated business from Supabase');
-                        // Update cache only if fetch succeeds
-                        setCachedBusiness(fetchedBusiness);
-                        // Update UI with fresh data (but don't redirect)
-                        updateBusinessHeaderSync(fetchedBusiness);
-                        updateNavbarBusinessNameSync(fetchedBusiness);
-                    }
-                }).catch(err => {
-                    // Silently fail - we already have cached data, UI stays intact
-                    console.warn('[Auth] Background sync failed (using cached):', err);
-                });
-            }
-            
-            // Return early - we have cached data, UI is rendered
-            return;
-        }
-        
-        // No cached business - try to fetch from Supabase (but don't block)
-        if (isOnline()) {
+        // If no cache or cache is stale, fetch from Supabase (non-blocking)
+        if (!business || !isOnline()) {
             try {
                 const fetchedBusiness = await getBusinessForUser(userId);
                 if (fetchedBusiness) {
                     business = fetchedBusiness;
                     // Update cache
-                    setCachedBusiness(fetchedBusiness);
+                    setCachedBusiness(business);
                 }
             } catch (fetchErr) {
-                // Supabase unreachable - but we don't have cache, so show setup
-                console.warn('[Auth] Could not fetch business from Supabase:', fetchErr);
-                // Don't redirect - if offline and no cache, show business setup
-                business = null;
+                // If offline and we have cached business, use it
+                if (!isOnline() && business) {
+                    console.log('[Auth] Offline - using cached business data');
+                } else {
+                    // No cache and offline, or fetch failed
+                    console.warn('[Auth] Could not fetch business:', fetchErr);
+                    business = null;
+                }
             }
-        } else {
-            // Offline and no cache - show business setup
-            console.log('[Auth] Offline and no cached business - showing business setup');
-            business = null;
         }
         
         if (!business) {
-            console.log('[Auth] No business found (no cache, no Supabase), showing business setup');
+            console.log('[Auth] No business found, showing business setup');
             // Show business setup - this is the ONLY time business-setup should appear for authenticated user
             showScreen('business-setup-screen');
         } else {
-            console.log('[Auth] Business found from Supabase, showing dashboard');
+            console.log('[Auth] Business found, showing dashboard');
             // Hide business setup screen if it was showing
             const businessSetupScreen = document.getElementById('business-setup-screen');
             if (businessSetupScreen) {
@@ -4505,55 +4375,39 @@ async function restoreUserSession(userId) {
         }
     } catch (err) {
         console.error('[Auth] Error restoring session:', err);
-        // On error, try cache FIRST before redirecting
-        const cachedBusiness = getCachedBusiness();
-        if (cachedBusiness) {
-            // We have cached business - show dashboard (offline-first)
-            console.log('[Auth] Error occurred but cached business exists - showing dashboard');
-            // Hide auth screens
-            const loginScreen = document.getElementById('login-screen');
-            const signupScreen = document.getElementById('signup-screen');
-            if (loginScreen) {
-                loginScreen.classList.remove('active');
-                loginScreen.style.display = 'none';
-            }
-            if (signupScreen) {
-                signupScreen.classList.remove('active');
-                signupScreen.style.display = 'none';
-            }
-            // Show dashboard with cached business
-            showScreen('home-screen');
-            updateBusinessHeaderSync(cachedBusiness);
-            updateNavbarBusinessNameSync(cachedBusiness);
-        } else {
-            // No cached business - check if we have a session
-            const supabase = await getSupabaseAsync();
-            if (supabase) {
-                try {
-                    const { data: { session } } = await supabase.auth.getSession();
-                    if (!session || !session.user) {
-                        // Not authenticated - show login
-                        showScreen('login-screen');
-                    } else {
-                        // Has session but error fetching business - show business setup
-                        showScreen('business-setup-screen');
-                    }
-                } catch (sessionErr) {
-                    // Can't check session - if offline, show setup; otherwise login
-                    if (isOnline()) {
-                        showScreen('login-screen');
-                    } else {
-                        showScreen('business-setup-screen');
-                    }
-                }
+        // On error, check session again
+        const supabase = await getSupabaseAsync();
+        if (supabase) {
+            const { data: { session } } = await supabase.auth.getSession();
+            if (!session || !session.user) {
+                // Not authenticated - show login
+                showScreen('login-screen');
             } else {
-                // No Supabase - show login only if we're online, otherwise setup
-                if (isOnline()) {
-                    showScreen('login-screen');
+                // Has session but error fetching business - try cache
+                const cachedBusiness = getCachedBusiness();
+                if (cachedBusiness) {
+                    // Hide auth screens
+                    const loginScreen = document.getElementById('login-screen');
+                    const signupScreen = document.getElementById('signup-screen');
+                    if (loginScreen) {
+                        loginScreen.classList.remove('active');
+                        loginScreen.style.display = 'none';
+                    }
+                    if (signupScreen) {
+                        signupScreen.classList.remove('active');
+                        signupScreen.style.display = 'none';
+                    }
+                    // Show dashboard with cached business
+                    showScreen('home-screen');
+                    updateBusinessHeaderSync(cachedBusiness);
+                    updateNavbarBusinessNameSync(cachedBusiness);
                 } else {
+                    // No cached business - show business setup (authenticated user needs to complete setup)
                     showScreen('business-setup-screen');
                 }
             }
+        } else {
+            showScreen('login-screen');
         }
     }
 }
@@ -5178,47 +5032,32 @@ function setupAuthForms() {
 }
 
 // Get business for user (one business per user)
-// Only fetches from Supabase - use getBusiness() for offline-first access
 async function getBusinessForUser(userId) {
     const supabase = await getSupabaseAsync();
     if (!supabase) return null;
     
-    try {
-        const { data, error } = await supabase
-            .from('businesses')
-            .select('*')
-            .eq('user_id', userId)
-            .limit(1)
-            .single();
-        
-        if (error || !data) return null;
-        
-        const business = {
-            id: data.id,
-            name: data.name,
-            email: data.email || null,
-            phone: data.phone,
-            createdAt: data.created_at
-        };
-        
-        // Store user ID for offline restoration
-        localStorage.setItem('measurement_vault_last_user_id', userId);
-        
-        return business;
-    } catch (err) {
-        console.warn('[GetBusinessForUser] Supabase error:', err);
-        return null;
-    }
+    const { data, error } = await supabase
+        .from('businesses')
+        .select('*')
+        .eq('user_id', userId)
+        .limit(1)
+        .single();
+    
+    if (error || !data) return null;
+    
+    return {
+        id: data.id,
+        name: data.name,
+        email: data.email || null,
+        phone: data.phone,
+        createdAt: data.created_at
+    };
 }
 
 // Load user data (clients and measurements) - LOCAL-FIRST with strict load order
-// OFFLINE-FIRST: Load from IndexedDB FIRST, sync with Supabase in background
 async function loadUserData(userId) {
     try {
         console.log('[LoadData] Starting data load for user:', userId);
-        
-        // Store user ID for offline restoration
-        localStorage.setItem('measurement_vault_last_user_id', userId);
         
         // Step 1: Initialize IndexedDB FIRST (required for all operations)
         if (window.indexedDBHelper) {
@@ -5227,98 +5066,48 @@ async function loadUserData(userId) {
                 console.log('[LoadData] IndexedDB initialized');
             } catch (dbErr) {
                 console.error('[LoadData] IndexedDB initialization failed:', dbErr);
-                // Don't throw - try to continue with localStorage cache
-                console.warn('[LoadData] Continuing with localStorage cache');
+                throw new Error('Failed to initialize local database');
             }
         } else {
-            console.warn('[LoadData] IndexedDB helper not available - using localStorage');
+            console.warn('[LoadData] IndexedDB helper not available');
         }
         
         // Step 2: Load business (required for business_id)
-        // OFFLINE-FIRST: Use getBusiness() which checks cache FIRST
-        const business = await getBusiness(true);
+        const business = await getBusinessForUser(userId);
         if (business) {
             updateBusinessHeaderSync(business);
             updateNavbarBusinessNameSync(business);
-            console.log('[LoadData] Business loaded from cache:', business.name);
+            console.log('[LoadData] Business loaded:', business.name);
         } else {
-            // Try to get from Supabase in background (non-blocking)
-            if (isOnline()) {
-                try {
-                    const fetchedBusiness = await getBusinessForUser(userId);
-                    if (fetchedBusiness) {
-                        // Cache and update UI
-                        setCachedBusiness(fetchedBusiness);
-                        updateBusinessHeaderSync(fetchedBusiness);
-                        updateNavbarBusinessNameSync(fetchedBusiness);
-                        console.log('[LoadData] Business fetched from Supabase:', fetchedBusiness.name);
-                    } else {
-                        console.warn('[LoadData] No business found for user');
-                        // Don't return - continue with cached data if available
-                    }
-                } catch (fetchErr) {
-                    console.warn('[LoadData] Could not fetch business (may be offline):', fetchErr);
-                    // Don't return - continue with cached data if available
-                    // Try to load cached business as fallback
-                    const cachedBusiness = getCachedBusiness();
-                    if (cachedBusiness) {
-                        updateBusinessHeaderSync(cachedBusiness);
-                        updateNavbarBusinessNameSync(cachedBusiness);
-                        console.log('[LoadData] Using cached business as fallback');
-                    }
-                }
-            } else {
-                console.warn('[LoadData] Offline - using cached business if available');
-                // Try to load cached business
-                const cachedBusiness = getCachedBusiness();
-                if (cachedBusiness) {
-                    updateBusinessHeaderSync(cachedBusiness);
-                    updateNavbarBusinessNameSync(cachedBusiness);
-                    console.log('[LoadData] Using cached business (offline)');
-                }
-            }
+            console.warn('[LoadData] No business found for user');
+            return; // Cannot proceed without business
         }
         
         // Step 3: Seed IndexedDB from Supabase on first load (one-time migration)
-        // OFFLINE-FIRST: Only seed if online, don't block if offline
         // This must happen BEFORE loading clients/measurements
-        if (isOnline()) {
-            try {
-                await seedIndexedDBFromSupabase(userId);
-                console.log('[LoadData] IndexedDB seeding complete');
-            } catch (seedErr) {
-                console.warn('[LoadData] IndexedDB seeding failed (may be offline):', seedErr);
-                // Don't block - continue with existing IndexedDB data
-            }
-        } else {
-            console.log('[LoadData] Offline - skipping IndexedDB seeding');
-        }
+        await seedIndexedDBFromSupabase(userId);
+        console.log('[LoadData] IndexedDB seeding complete');
         
         // Step 4: Load clients FIRST (measurements depend on clients)
-        // OFFLINE-FIRST: Load from IndexedDB/localStorage FIRST
         console.log('[LoadData] Loading clients...');
         const clients = await getClients(true);
         if (!Array.isArray(clients)) {
-            console.warn('[LoadData] Failed to load clients - may be offline');
-            // Don't return - try to continue with cached data
-        } else {
-            console.log('[LoadData] Clients loaded:', clients.length);
+            console.error('[LoadData] Failed to load clients');
+            return;
         }
+        console.log('[LoadData] Clients loaded:', clients.length);
         
         // Step 5: Load measurements AFTER clients are loaded
-        // OFFLINE-FIRST: Load from IndexedDB/localStorage FIRST
         console.log('[LoadData] Loading measurements...');
         const measurements = await getMeasurements(true);
         if (!Array.isArray(measurements)) {
-            console.warn('[LoadData] Failed to load measurements - may be offline');
-            // Don't return - try to continue with cached data
-        } else {
-            console.log('[LoadData] Measurements loaded:', measurements.length);
+            console.error('[LoadData] Failed to load measurements');
+            return;
         }
+        console.log('[LoadData] Measurements loaded:', measurements.length);
         
-        // Step 6: Start background sync (silent) - only after data is loaded and online
-        // OFFLINE-FIRST: Only sync when online, don't block UI
-        if (isOnline() && window.syncManager && window.indexedDBHelper) {
+        // Step 6: Start background sync (silent) - only after data is loaded
+        if (window.syncManager && window.indexedDBHelper) {
             // Ensure IndexedDB is ready before starting sync
             try {
                 await window.indexedDBHelper.getDB(); // Verify DB is accessible
@@ -5326,16 +5115,10 @@ async function loadUserData(userId) {
                 console.log('[LoadData] Background sync started');
             } catch (syncErr) {
                 console.warn('[LoadData] Sync not started - IndexedDB not ready:', syncErr);
-                // Don't block - continue with cached data
-            }
-        } else {
-            if (!isOnline()) {
-                console.log('[LoadData] Offline - skipping background sync');
             }
         }
         
         // Step 7: Render recent measurements (clients are now loaded)
-        // OFFLINE-FIRST: Render even if data is from cache
         console.log('[LoadData] Rendering recent measurements...');
         renderRecentMeasurements();
         console.log('[LoadData] Data load complete');
