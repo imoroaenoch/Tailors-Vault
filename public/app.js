@@ -7122,6 +7122,139 @@ if (typeof window !== 'undefined') {
             // Don't throw - this is a background operation
         }
     });
+
+// ============================================
+// PULL-TO-REFRESH (MOBILE)
+// ============================================
+// Enables a native-feeling "pull down to refresh" on touch devices.
+// When the user pulls down from the top of the scroll, we reload core data.
+(function setupPullToRefresh() {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    let touchStartY = 0;
+    let isPulling = false;
+    let lastDeltaY = 0;
+    const THRESHOLD = 60; // pixels to trigger refresh
+
+    // Simple visual indicator at the top
+    let indicator = document.getElementById('pull-to-refresh-indicator');
+    if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.id = 'pull-to-refresh-indicator';
+        indicator.style.position = 'fixed';
+        indicator.style.top = '0';
+        indicator.style.left = '0';
+        indicator.style.right = '0';
+        indicator.style.height = '0px';
+        indicator.style.display = 'flex';
+        indicator.style.alignItems = 'center';
+        indicator.style.justifyContent = 'center';
+        indicator.style.background = 'var(--bg-primary, #020617)';
+        indicator.style.color = 'var(--text-secondary, #9ca3af)';
+        indicator.style.fontSize = '12px';
+        indicator.style.transition = 'height 0.15s ease, opacity 0.15s ease';
+        indicator.style.zIndex = '9998';
+        indicator.style.opacity = '0';
+        indicator.textContent = 'Release to refresh...';
+        document.body.appendChild(indicator);
+    }
+
+    function showIndicator(amount) {
+        const clamped = Math.min(amount, THRESHOLD * 1.5);
+        indicator.style.height = clamped + 'px';
+        indicator.style.opacity = clamped > 10 ? '1' : '0';
+    }
+
+    function hideIndicator() {
+        indicator.style.height = '0px';
+        indicator.style.opacity = '0';
+    }
+
+    async function performRefresh() {
+        try {
+            const cachedSession = getCachedSession && getCachedSession();
+            const user = cachedSession?.user || (await getCurrentUser());
+            if (!user) {
+                hideIndicator();
+                return;
+            }
+
+            // Reload core data
+            await loadUserData(user.id);
+
+            // Re-render screen-specific data
+            const active = document.querySelector('.screen.active');
+            const screenId = active?.id;
+            if (screenId === 'clients-screen' && typeof renderClientsList === 'function') {
+                await renderClientsList();
+            } else if (screenId === 'home-screen' && typeof renderRecentMeasurements === 'function') {
+                await renderRecentMeasurements();
+            }
+
+            if (typeof showToast === 'function') {
+                showToast('Data refreshed', 'success', 1500);
+            }
+        } catch (err) {
+            console.warn('[PullToRefresh] Refresh failed:', err);
+            if (typeof showToast === 'function') {
+                showToast('Failed to refresh. Please try again.', 'error', 2000);
+            }
+        } finally {
+            hideIndicator();
+            isPulling = false;
+            lastDeltaY = 0;
+        }
+    }
+
+    window.addEventListener(
+        'touchstart',
+        (e) => {
+            if (window.scrollY === 0) {
+                touchStartY = e.touches[0].clientY;
+                isPulling = true;
+                lastDeltaY = 0;
+            } else {
+                isPulling = false;
+            }
+        },
+        { passive: true }
+    );
+
+    window.addEventListener(
+        'touchmove',
+        (e) => {
+            if (!isPulling) return;
+            const currentY = e.touches[0].clientY;
+            const deltaY = currentY - touchStartY;
+            if (deltaY > 0) {
+                lastDeltaY = deltaY;
+                showIndicator(deltaY);
+            } else {
+                // User moved up again; cancel
+                hideIndicator();
+                isPulling = false;
+                lastDeltaY = 0;
+            }
+        },
+        { passive: true }
+    );
+
+    window.addEventListener(
+        'touchend',
+        () => {
+            if (!isPulling) return;
+            if (lastDeltaY >= THRESHOLD) {
+                // Trigger refresh
+                performRefresh();
+            } else {
+                hideIndicator();
+                isPulling = false;
+                lastDeltaY = 0;
+            }
+        },
+        { passive: true }
+    );
+})();
     
     // Helper function to fix clients' business_id
     window.fixClientsBusinessId = async function() {

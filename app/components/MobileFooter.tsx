@@ -115,9 +115,9 @@ export default function MobileFooter() {
   }
 
   const handleSearchClients = () => {
-    const tryShowScreen = () => {
+    const tryShowScreenAndLoad = () => {
       if (typeof (window as any).showScreen === 'function') {
-        (window as any).showScreen('clients-screen')
+        ;(window as any).showScreen('clients-screen')
       } else {
         const clientsScreen = document.getElementById('clients-screen')
         if (clientsScreen) {
@@ -127,10 +127,19 @@ export default function MobileFooter() {
           clientsScreen.classList.add('active')
         }
       }
+
+      // After showing the screen, trigger client list render (same as dashboard button)
+      if (typeof (window as any).renderClientsList === 'function') {
+        // Defer to next frame so DOM is ready
+        requestAnimationFrame(() => {
+          ;(window as any).renderClientsList()
+        })
+      }
     }
     
-    tryShowScreen()
-    setTimeout(tryShowScreen, 100)
+    // Try immediately, then retry once more in case app.js isn't ready yet
+    tryShowScreenAndLoad()
+    setTimeout(tryShowScreenAndLoad, 100)
   }
 
   const handleNewMeasurement = () => {
