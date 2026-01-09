@@ -3728,6 +3728,287 @@ async function deleteClientFromList(clientId) {
     renderClientsList();
 }
 
+// ===============================
+// EXPORT / DOWNLOAD HELPERS
+// ===============================
+
+// Simple date formatter for exports
+function formatDateForExport(dateStr) {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return dateStr;
+    return d.toISOString().split('T')[0];
+}
+
+// Create and trigger download of a text file (CSV)
+function downloadTextFile(filename, content, mimeType = 'text/plain') {
+    const blob = new Blob([content], { type: mimeType + ';charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+// Reusable modal for choosing download format
+function showDownloadFormatDialog(title, description, onSelect) {
+    const overlay = document.createElement('div');
+    overlay.className = 'download-format-overlay';
+    overlay.style.position = 'fixed';
+    overlay.style.top = '0';
+    overlay.style.left = '0';
+    overlay.style.right = '0';
+    overlay.style.bottom = '0';
+    overlay.style.background = 'rgba(0,0,0,0.45)';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.style.zIndex = '9999';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'download-format-dialog';
+    dialog.style.background = 'var(--bg-primary, #020617)';
+    dialog.style.color = 'var(--text-primary, #f9fafb)';
+    dialog.style.borderRadius = '12px';
+    dialog.style.padding = '20px 18px 16px';
+    dialog.style.maxWidth = '360px';
+    dialog.style.width = '90%';
+    dialog.style.boxShadow = '0 18px 45px rgba(0,0,0,0.45)';
+
+    dialog.innerHTML = `
+        <h3 style="margin: 0 0 8px; font-size: 16px; font-weight: 600;">${escapeHtml(title)}</h3>
+        <p style="margin: 0 0 16px; font-size: 13px; color: var(--text-secondary, #9ca3af);">
+            ${escapeHtml(description)}
+        </p>
+        <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px;">
+            <button id="download-format-excel" class="btn btn-primary" style="width: 100%; justify-content: center;">
+                Excel (.csv)
+            </button>
+            <button id="download-format-pdf" class="btn btn-secondary" style="width: 100%; justify-content: center;">
+                PDF (printable)
+            </button>
+        </div>
+        <button id="download-format-cancel" class="btn btn-secondary" style="width: 100%; justify-content: center;">
+            Cancel
+        </button>
+    `;
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    const cleanup = () => {
+        document.body.removeChild(overlay);
+    };
+
+    dialog.querySelector('#download-format-excel').addEventListener('click', () => {
+        cleanup();
+        onSelect('excel');
+    });
+    dialog.querySelector('#download-format-pdf').addEventListener('click', () => {
+        cleanup();
+        onSelect('pdf');
+    });
+    dialog.querySelector('#download-format-cancel').addEventListener('click', () => {
+        cleanup();
+    });
+}
+
+// Build CSV rows for measurements + clients
+function buildMeasurementsCsvRows(clients, measurements) {
+    const clientMap = new Map();
+    (clients || []).forEach(c => {
+        clientMap.set(c.id, c);
+    });
+
+    const headers = [
+        'Client Name',
+        'Client Phone',
+        'Client Sex',
+        'Measurement ID',
+        'Date',
+        'Garment Type',
+        'Shoulder',
+        'Chest',
+        'Waist',
+        'Sleeve',
+        'Length',
+        'Neck',
+        'Hip',
+        'Inseam',
+        'Thigh',
+        'Seat',
+        'Notes'
+    ];
+
+    const rows = [headers];
+
+    (measurements || []).forEach(m => {
+        const client = clientMap.get(m.client_id) || {};
+        rows.push([
+            client.name || '',
+            client.phone || '',
+            client.sex || '',
+            m.id || '',
+            formatDateForExport(m.date_created),
+            m.garment_type || '',
+            m.shoulder != null ? m.shoulder : '',
+            m.chest != null ? m.chest : '',
+            m.waist != null ? m.waist : '',
+            m.sleeve != null ? m.sleeve : '',
+            m.length != null ? m.length : '',
+            m.neck != null ? m.neck : '',
+            m.hip != null ? m.hip : '',
+            m.inseam != null ? m.inseam : '',
+            m.thigh != null ? m.thigh : '',
+            m.seat != null ? m.seat : '',
+            (m.notes || '').replace(/\r?\n/g, ' ')
+        ]);
+    });
+
+    // Convert to CSV string
+    return rows
+        .map(cols =>
+            cols
+                .map(col => {
+                    const value = col == null ? '' : String(col);
+                    if (/[",\n]/.test(value)) {
+                        return `"${value.replace(/"/g, '""')}"`;
+                    }
+                    return value;
+                })
+                .join(',')
+        )
+        .join('\n');
+}
+
+// Open printable window for PDF-like export (user can Save as PDF)
+function openPrintableMeasurementsWindow(title, clients, measurements) {
+    const clientMap = new Map();
+    (clients || []).forEach(c => {
+        clientMap.set(c.id, c);
+    });
+
+    const win = window.open('', '_blank');
+    if (!win) {
+        alert('Popup blocked. Please allow popups to download PDF.');
+        return;
+    }
+
+    const rowsHtml = (measurements || [])
+        .map(m => {
+            const client = clientMap.get(m.client_id) || {};
+            return `
+                <tr>
+                    <td>${escapeHtml(client.name || '')}</td>
+                    <td>${escapeHtml(client.phone || '')}</td>
+                    <td>${escapeHtml(client.sex || '')}</td>
+                    <td>${escapeHtml(m.garment_type || '')}</td>
+                    <td>${escapeHtml(formatDateForExport(m.date_created))}</td>
+                    <td>${m.shoulder != null ? escapeHtml(String(m.shoulder)) : ''}</td>
+                    <td>${m.chest != null ? escapeHtml(String(m.chest)) : ''}</td>
+                    <td>${m.waist != null ? escapeHtml(String(m.waist)) : ''}</td>
+                    <td>${m.sleeve != null ? escapeHtml(String(m.sleeve)) : ''}</td>
+                    <td>${m.length != null ? escapeHtml(String(m.length)) : ''}</td>
+                    <td>${m.neck != null ? escapeHtml(String(m.neck)) : ''}</td>
+                    <td>${m.hip != null ? escapeHtml(String(m.hip)) : ''}</td>
+                    <td>${m.inseam != null ? escapeHtml(String(m.inseam)) : ''}</td>
+                    <td>${m.thigh != null ? escapeHtml(String(m.thigh)) : ''}</td>
+                    <td>${m.seat != null ? escapeHtml(String(m.seat)) : ''}</td>
+                    <td>${escapeHtml(m.notes || '')}</td>
+                </tr>
+            `;
+        })
+        .join('');
+
+    const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8" />
+            <title>${escapeHtml(title)}</title>
+            <style>
+                body {
+                    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                    padding: 16px;
+                    color: #0f172a;
+                }
+                h1 {
+                    font-size: 20px;
+                    margin-bottom: 4px;
+                }
+                h2 {
+                    font-size: 14px;
+                    font-weight: 500;
+                    color: #6b7280;
+                    margin-top: 0;
+                    margin-bottom: 16px;
+                }
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 12px;
+                }
+                th, td {
+                    border: 1px solid #e5e7eb;
+                    padding: 6px 8px;
+                    text-align: left;
+                    vertical-align: top;
+                }
+                th {
+                    background: #f3f4f6;
+                    font-weight: 600;
+                }
+                tbody tr:nth-child(even) {
+                    background: #f9fafb;
+                }
+            </style>
+        </head>
+        <body>
+            <h1>${escapeHtml(title)}</h1>
+            <h2>Generated from Tailor's Vault</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Client Name</th>
+                        <th>Phone</th>
+                        <th>Sex</th>
+                        <th>Garment</th>
+                        <th>Date</th>
+                        <th>Shoulder</th>
+                        <th>Chest</th>
+                        <th>Waist</th>
+                        <th>Sleeve</th>
+                        <th>Length</th>
+                        <th>Neck</th>
+                        <th>Hip</th>
+                        <th>Inseam</th>
+                        <th>Thigh</th>
+                        <th>Seat</th>
+                        <th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${rowsHtml}
+                </tbody>
+            </table>
+            <script>
+                window.onload = function () {
+                    window.focus();
+                    window.print();
+                };
+            </script>
+        </body>
+        </html>
+    `;
+
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+}
+
 // Show Measurement Detail View
 let currentMeasurementDetailId = null;
 
@@ -3910,6 +4191,114 @@ document.addEventListener('click', (e) => {
 document.addEventListener('scroll', () => {
     closeAllMenuDropdowns();
 }, true);
+
+// ===============================
+// EXPORT HANDLERS (CLIENT / ALL)
+// ===============================
+
+// Per-client download button (on client details screen)
+document.getElementById('download-client-measurements-btn').addEventListener('click', async () => {
+    try {
+        if (!currentClientId) {
+            alert('Client not found');
+            return;
+        }
+
+        const user = await getCurrentUser();
+        if (!user) {
+            alert('You must be logged in to download measurements.');
+            return;
+        }
+
+        const [clients, measurements] = await Promise.all([getClients(), getMeasurements()]);
+        if (!Array.isArray(clients) || !Array.isArray(measurements)) {
+            alert('Error loading data. Please try again.');
+            return;
+        }
+
+        const client = clients.find(c => c.id === currentClientId);
+        if (!client) {
+            alert('Client not found');
+            return;
+        }
+
+        const clientMeasurements = measurements.filter(m => m.client_id === currentClientId);
+
+        if (clientMeasurements.length === 0) {
+            alert('No measurements found for this client.');
+            return;
+        }
+
+        showDownloadFormatDialog(
+            'Download Measurements',
+            `Choose a format to download measurements for ${client.name}.`,
+            (format) => {
+                if (format === 'excel') {
+                    const csv = buildMeasurementsCsvRows([client], clientMeasurements);
+                    const safeName = (client.name || 'client').replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+                    const filename = `measurements_${safeName}.csv`;
+                    downloadTextFile(filename, csv, 'text/csv');
+                    showToast && showToast('Excel file downloaded', 'success', 2000);
+                } else if (format === 'pdf') {
+                    openPrintableMeasurementsWindow(
+                        `Measurements for ${client.name}`,
+                        [client],
+                        clientMeasurements
+                    );
+                }
+            }
+        );
+    } catch (err) {
+        console.error('Error downloading client measurements:', err);
+        showToast && showToast('Failed to download measurements. Please try again.', 'error', 3000);
+    }
+});
+
+// Business-wide download button (settings screen)
+document.getElementById('download-all-measurements-btn').addEventListener('click', async () => {
+    try {
+        const user = await getCurrentUser();
+        if (!user) {
+            alert('You must be logged in to download measurements.');
+            return;
+        }
+
+        const [clients, measurements] = await Promise.all([getClients(), getMeasurements()]);
+        if (!Array.isArray(clients) || !Array.isArray(measurements)) {
+            alert('Error loading data. Please try again.');
+            return;
+        }
+
+        if (measurements.length === 0 || clients.length === 0) {
+            alert('No clients or measurements found to download.');
+            return;
+        }
+
+        showDownloadFormatDialog(
+            'Download All Clients\' Measurements',
+            'Choose a format to download all measurements for this business.',
+            (format) => {
+                if (format === 'excel') {
+                    const csv = buildMeasurementsCsvRows(clients, measurements);
+                    const business = getCachedBusiness && getCachedBusiness();
+                    const safeName = (business?.name || 'business').replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+                    const filename = `measurements_${safeName}_all_clients.csv`;
+                    downloadTextFile(filename, csv, 'text/csv');
+                    showToast && showToast('Excel file downloaded', 'success', 2000);
+                } else if (format === 'pdf') {
+                    const business = getCachedBusiness && getCachedBusiness();
+                    const title = business?.name
+                        ? `Measurements for ${business.name} (All Clients)`
+                        : 'Measurements for All Clients';
+                    openPrintableMeasurementsWindow(title, clients, measurements);
+                }
+            }
+        );
+    } catch (err) {
+        console.error('Error downloading all measurements:', err);
+        showToast && showToast('Failed to download measurements. Please try again.', 'error', 3000);
+    }
+});
 
 // Theme Toggle Functionality
 const THEME_STORAGE_KEY = 'measurement_vault_theme';

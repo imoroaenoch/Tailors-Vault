@@ -514,6 +514,20 @@ export default function Home() {
             </div>
 
             <div className="settings-section" style={{ marginTop: '40px' }}>
+              <h3>Exports</h3>
+              <p className="settings-info">
+                Download measurements for reporting or backup. Uses your current business and clients.
+              </p>
+              <button 
+                id="download-all-measurements-btn" 
+                className="btn btn-secondary" 
+                style={{ marginTop: '12px' }}
+              >
+                Download All Clients&apos; Measurements
+              </button>
+            </div>
+
+            <div className="settings-section" style={{ marginTop: '40px' }}>
               <h3>Email Linking</h3>
               <p className="settings-info">Link your email to sync data across devices and enable account recovery.</p>
               <div id="email-linking-status" className="email-linking-status"></div>
@@ -1074,6 +1088,14 @@ export default function Home() {
               <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
             Add Measurement
+          </button>
+          
+          <button 
+            id="download-client-measurements-btn" 
+            className="btn btn-secondary" 
+            style={{ marginTop: '12px', width: '100%' }}
+          >
+            Download Measurements
           </button>
         </div>
       </div>
