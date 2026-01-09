@@ -2446,7 +2446,7 @@ function updateBusinessHeaderSync(business) {
             headerElement.textContent = businessName;
             headerElement.setAttribute('title', businessName);
         } else {
-            headerElement.textContent = 'Measurement Vault';
+            headerElement.textContent = 'Tailors Vault';
             headerElement.removeAttribute('title');
         }
     }
@@ -2464,7 +2464,7 @@ function updateNavbarBusinessNameSync(business) {
     if (!business) {
         business = getCachedBusiness();
     }
-    const businessName = (business && business.name && !isUserLoggedOut()) ? business.name : 'Measurement Vault';
+    const businessName = (business && business.name && !isUserLoggedOut()) ? business.name : 'Tailors Vault';
     
     document.querySelectorAll('.navbar-business-name').forEach(element => {
         element.textContent = businessName;
@@ -3637,6 +3637,24 @@ async function renderClientsList() {
         a.name.toLowerCase().localeCompare(b.name.toLowerCase())
     );
     
+    // Add bulk actions header if not exists
+    const containerParent = container.parentNode;
+    let bulkActionsHeader = containerParent.querySelector('.clients-bulk-actions');
+    if (!bulkActionsHeader) {
+        bulkActionsHeader = document.createElement('div');
+        bulkActionsHeader.className = 'clients-bulk-actions';
+        bulkActionsHeader.style.display = 'none';
+        bulkActionsHeader.innerHTML = `
+            <div class="bulk-actions-info">
+                <span id="bulk-selected-count">0</span> selected
+            </div>
+            <button id="bulk-delete-clients-btn" class="btn btn-delete btn-sm">
+                Delete Selected
+            </button>
+        `;
+        containerParent.insertBefore(bulkActionsHeader, container);
+    }
+    
     container.innerHTML = sortedClients.map((client, index) => {
         const clientMeasurements = measurements.filter(m => m.client_id === client.id);
         const measurementCount = clientMeasurements.length;
@@ -3656,6 +3674,9 @@ async function renderClientsList() {
         
         return `
             <div class="client-leaderboard-card" data-client-id="${client.id}">
+                <div class="client-card-checkbox">
+                    <input type="checkbox" class="client-select-checkbox" data-client-id="${client.id}" aria-label="Select client">
+                </div>
                 <div class="client-card-index">
                     <span class="client-index-badge">${index + 1}</span>
                 </div>
@@ -3679,14 +3700,79 @@ async function renderClientsList() {
         `;
     }).join('');
     
-    // Add click listeners for client cards (to view details)
+    // Add click listeners for client cards (to view details) - but not when clicking checkbox
     container.querySelectorAll('.client-leaderboard-card').forEach(card => {
-        // Make the entire card clickable
-        card.addEventListener('click', async () => {
+        card.addEventListener('click', async (e) => {
+            // Don't navigate if clicking checkbox
+            if (e.target.closest('.client-select-checkbox')) {
+                return;
+            }
             const clientId = card.getAttribute('data-client-id');
             await showClientDetails(clientId, 'clients-screen');
         });
     });
+    
+    // Add checkbox change listeners for bulk selection
+    container.querySelectorAll('.client-select-checkbox').forEach(checkbox => {
+        checkbox.addEventListener('change', (e) => {
+            e.stopPropagation();
+            updateBulkActionsUI();
+        });
+    });
+    
+    // Bulk delete button handler
+    const bulkDeleteBtn = document.getElementById('bulk-delete-clients-btn');
+    if (bulkDeleteBtn) {
+        bulkDeleteBtn.replaceWith(bulkDeleteBtn.cloneNode(true)); // Remove old listeners
+        document.getElementById('bulk-delete-clients-btn').addEventListener('click', async () => {
+            const selectedIds = getSelectedClientIds();
+            if (selectedIds.length === 0) {
+                alert('Please select at least one client to delete.');
+                return;
+            }
+            
+            const count = selectedIds.length;
+            if (!confirm(`Are you sure you want to delete ${count} client${count !== 1 ? 's' : ''}? This will also delete all associated measurements.`)) {
+                return;
+            }
+            
+            // Delete all selected clients
+            for (const clientId of selectedIds) {
+                await deleteClient(clientId);
+            }
+            
+            // Clear selection and refresh list
+            clearClientSelection();
+            renderClientsList();
+            showToast && showToast(`${count} client${count !== 1 ? 's' : ''} deleted`, 'success', 3000);
+        });
+    }
+    
+    // Helper functions for bulk actions
+    function getSelectedClientIds() {
+        return Array.from(container.querySelectorAll('.client-select-checkbox:checked'))
+            .map(cb => cb.getAttribute('data-client-id'));
+    }
+    
+    function updateBulkActionsUI() {
+        const selectedIds = getSelectedClientIds();
+        const bulkActions = document.querySelector('.clients-bulk-actions');
+        const countEl = document.getElementById('bulk-selected-count');
+        
+        if (selectedIds.length > 0) {
+            if (bulkActions) bulkActions.style.display = 'flex';
+            if (countEl) countEl.textContent = selectedIds.length;
+        } else {
+            if (bulkActions) bulkActions.style.display = 'none';
+        }
+    }
+    
+    function clearClientSelection() {
+        container.querySelectorAll('.client-select-checkbox').forEach(cb => {
+            cb.checked = false;
+        });
+        updateBulkActionsUI();
+    }
 }
 
 // Edit client from list
@@ -3823,6 +3909,21 @@ function buildMeasurementsCsvRows(clients, measurements) {
         clientMap.set(c.id, c);
     });
 
+    // Collect all unique custom field names from all measurements
+    const customFieldNames = new Set();
+    (measurements || []).forEach(m => {
+        const customFields = m.custom_fields || m.customFields || {};
+        Object.keys(customFields).forEach(key => {
+            if (customFields[key] != null && customFields[key] !== '') {
+                customFieldNames.add(key);
+            }
+        });
+    });
+    
+    // Sort custom field names for consistent ordering
+    const sortedCustomFields = Array.from(customFieldNames).sort();
+
+    // Build headers with standard fields first, then custom fields
     const headers = [
         'Client Name',
         'Client Phone',
@@ -3840,6 +3941,10 @@ function buildMeasurementsCsvRows(clients, measurements) {
         'Inseam',
         'Thigh',
         'Seat',
+        ...sortedCustomFields.map(name => {
+            // Capitalize first letter for display
+            return name.charAt(0).toUpperCase() + name.slice(1);
+        }),
         'Notes'
     ];
 
@@ -3847,12 +3952,15 @@ function buildMeasurementsCsvRows(clients, measurements) {
 
     (measurements || []).forEach(m => {
         const client = clientMap.get(m.client_id) || {};
-        rows.push([
+        const customFields = m.custom_fields || m.customFields || {};
+        
+        // Build row with standard fields
+        const row = [
             client.name || '',
             client.phone || '',
             client.sex || '',
             m.id || '',
-            formatDateForExport(m.date_created),
+            formatDateForExport(m.date_created || m.created_at),
             m.garment_type || '',
             m.shoulder != null ? m.shoulder : '',
             m.chest != null ? m.chest : '',
@@ -3863,9 +3971,19 @@ function buildMeasurementsCsvRows(clients, measurements) {
             m.hip != null ? m.hip : '',
             m.inseam != null ? m.inseam : '',
             m.thigh != null ? m.thigh : '',
-            m.seat != null ? m.seat : '',
-            (m.notes || '').replace(/\r?\n/g, ' ')
-        ]);
+            m.seat != null ? m.seat : ''
+        ];
+        
+        // Add custom field values in the same order as headers
+        sortedCustomFields.forEach(fieldName => {
+            const value = customFields[fieldName];
+            row.push(value != null && value !== '' ? String(value) : '');
+        });
+        
+        // Add notes at the end
+        row.push((m.notes || '').replace(/\r?\n/g, ' '));
+        
+        rows.push(row);
     });
 
     // Convert to CSV string
@@ -3891,35 +4009,84 @@ function openPrintableMeasurementsWindow(title, clients, measurements) {
         clientMap.set(c.id, c);
     });
 
+    // Collect all unique custom field names from all measurements
+    const customFieldNames = new Set();
+    (measurements || []).forEach(m => {
+        const customFields = m.custom_fields || m.customFields || {};
+        Object.keys(customFields).forEach(key => {
+            if (customFields[key] != null && customFields[key] !== '') {
+                customFieldNames.add(key);
+            }
+        });
+    });
+    
+    // Sort custom field names for consistent ordering
+    const sortedCustomFields = Array.from(customFieldNames).sort();
+
     const win = window.open('', '_blank');
     if (!win) {
         alert('Popup blocked. Please allow popups to download PDF.');
         return;
     }
 
+    // Build header row
+    const headerCells = [
+        '<th>Client Name</th>',
+        '<th>Phone</th>',
+        '<th>Sex</th>',
+        '<th>Garment</th>',
+        '<th>Date</th>',
+        '<th>Shoulder</th>',
+        '<th>Chest</th>',
+        '<th>Waist</th>',
+        '<th>Sleeve</th>',
+        '<th>Length</th>',
+        '<th>Neck</th>',
+        '<th>Hip</th>',
+        '<th>Inseam</th>',
+        '<th>Thigh</th>',
+        '<th>Seat</th>',
+        ...sortedCustomFields.map(name => {
+            const displayName = name.charAt(0).toUpperCase() + name.slice(1);
+            return `<th>${escapeHtml(displayName)}</th>`;
+        }),
+        '<th>Notes</th>'
+    ].join('');
+
     const rowsHtml = (measurements || [])
         .map(m => {
             const client = clientMap.get(m.client_id) || {};
-            return `
-                <tr>
-                    <td>${escapeHtml(client.name || '')}</td>
-                    <td>${escapeHtml(client.phone || '')}</td>
-                    <td>${escapeHtml(client.sex || '')}</td>
-                    <td>${escapeHtml(m.garment_type || '')}</td>
-                    <td>${escapeHtml(formatDateForExport(m.date_created))}</td>
-                    <td>${m.shoulder != null ? escapeHtml(String(m.shoulder)) : ''}</td>
-                    <td>${m.chest != null ? escapeHtml(String(m.chest)) : ''}</td>
-                    <td>${m.waist != null ? escapeHtml(String(m.waist)) : ''}</td>
-                    <td>${m.sleeve != null ? escapeHtml(String(m.sleeve)) : ''}</td>
-                    <td>${m.length != null ? escapeHtml(String(m.length)) : ''}</td>
-                    <td>${m.neck != null ? escapeHtml(String(m.neck)) : ''}</td>
-                    <td>${m.hip != null ? escapeHtml(String(m.hip)) : ''}</td>
-                    <td>${m.inseam != null ? escapeHtml(String(m.inseam)) : ''}</td>
-                    <td>${m.thigh != null ? escapeHtml(String(m.thigh)) : ''}</td>
-                    <td>${m.seat != null ? escapeHtml(String(m.seat)) : ''}</td>
-                    <td>${escapeHtml(m.notes || '')}</td>
-                </tr>
-            `;
+            const customFields = m.custom_fields || m.customFields || {};
+            
+            // Build row with standard fields
+            const cells = [
+                `<td>${escapeHtml(client.name || '')}</td>`,
+                `<td>${escapeHtml(client.phone || '')}</td>`,
+                `<td>${escapeHtml(client.sex || '')}</td>`,
+                `<td>${escapeHtml(m.garment_type || '')}</td>`,
+                `<td>${escapeHtml(formatDateForExport(m.date_created || m.created_at))}</td>`,
+                `<td>${m.shoulder != null ? escapeHtml(String(m.shoulder)) : ''}</td>`,
+                `<td>${m.chest != null ? escapeHtml(String(m.chest)) : ''}</td>`,
+                `<td>${m.waist != null ? escapeHtml(String(m.waist)) : ''}</td>`,
+                `<td>${m.sleeve != null ? escapeHtml(String(m.sleeve)) : ''}</td>`,
+                `<td>${m.length != null ? escapeHtml(String(m.length)) : ''}</td>`,
+                `<td>${m.neck != null ? escapeHtml(String(m.neck)) : ''}</td>`,
+                `<td>${m.hip != null ? escapeHtml(String(m.hip)) : ''}</td>`,
+                `<td>${m.inseam != null ? escapeHtml(String(m.inseam)) : ''}</td>`,
+                `<td>${m.thigh != null ? escapeHtml(String(m.thigh)) : ''}</td>`,
+                `<td>${m.seat != null ? escapeHtml(String(m.seat)) : ''}</td>`
+            ];
+            
+            // Add custom field values in the same order as headers
+            sortedCustomFields.forEach(fieldName => {
+                const value = customFields[fieldName];
+                cells.push(`<td>${value != null && value !== '' ? escapeHtml(String(value)) : ''}</td>`);
+            });
+            
+            // Add notes at the end
+            cells.push(`<td>${escapeHtml(m.notes || '')}</td>`);
+            
+            return `<tr>${cells.join('')}</tr>`;
         })
         .join('');
 
@@ -3972,22 +4139,7 @@ function openPrintableMeasurementsWindow(title, clients, measurements) {
             <table>
                 <thead>
                     <tr>
-                        <th>Client Name</th>
-                        <th>Phone</th>
-                        <th>Sex</th>
-                        <th>Garment</th>
-                        <th>Date</th>
-                        <th>Shoulder</th>
-                        <th>Chest</th>
-                        <th>Waist</th>
-                        <th>Sleeve</th>
-                        <th>Length</th>
-                        <th>Neck</th>
-                        <th>Hip</th>
-                        <th>Inseam</th>
-                        <th>Thigh</th>
-                        <th>Seat</th>
-                        <th>Notes</th>
+                        ${headerCells}
                     </tr>
                 </thead>
                 <tbody>
@@ -4417,6 +4569,103 @@ document.getElementById('delete-client-btn').addEventListener('click', async () 
     // Return to Clients Screen
     showScreen('clients-screen');
     await renderClientsList();
+});
+
+// Add Measurement from client details menu
+document.getElementById('add-measurement-menu-btn').addEventListener('click', async () => {
+    closeAllMenuDropdowns();
+    
+    if (!currentClientId) {
+        alert('Client not found');
+        return;
+    }
+    
+    const clients = await getClients();
+    if (!Array.isArray(clients)) return;
+    
+    const client = clients.find(c => c.id === currentClientId);
+    if (!client) {
+        alert('Client not found');
+        return;
+    }
+    
+    // Reset form first
+    resetMeasurementForm();
+    // currentClientId is already set
+    
+    // Update form header
+    document.querySelector('#new-measurement-screen h2').textContent = 'New Measurement';
+    
+    // Pre-fill form with client data
+    document.getElementById('client-name').value = client.name;
+    document.getElementById('client-name').disabled = true;
+    document.getElementById('phone-number').value = client.phone || '';
+    
+    if (client.sex) {
+        document.getElementById('client-sex').value = client.sex;
+    }
+    
+    showScreen('new-measurement-screen');
+});
+
+// Download Measurements from client details menu
+document.getElementById('download-measurements-menu-btn').addEventListener('click', async () => {
+    closeAllMenuDropdowns();
+    
+    try {
+        if (!currentClientId) {
+            alert('Client not found');
+            return;
+        }
+
+        const user = await getCurrentUser();
+        if (!user) {
+            alert('You must be logged in to download measurements.');
+            return;
+        }
+
+        const [clients, measurements] = await Promise.all([getClients(), getMeasurements()]);
+        if (!Array.isArray(clients) || !Array.isArray(measurements)) {
+            alert('Error loading data. Please try again.');
+            return;
+        }
+
+        const client = clients.find(c => c.id === currentClientId);
+        if (!client) {
+            alert('Client not found');
+            return;
+        }
+
+        const clientMeasurements = measurements.filter(m => m.client_id === currentClientId);
+
+        if (clientMeasurements.length === 0) {
+            alert('No measurements found for this client.');
+            return;
+        }
+
+        showDownloadFormatDialog(
+            'Download Measurements',
+            `Choose a format to download measurements for ${client.name}.`,
+            (format) => {
+                if (format === 'excel') {
+                    const csv = buildMeasurementsCsvRows([client], clientMeasurements);
+                    const safeName = (client.name || 'client').replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+                    const filename = `measurements_${safeName}.csv`;
+                    downloadTextFile(filename, csv, 'text/csv');
+                    showToast && showToast('Excel file downloaded', 'success', 2000);
+                } else if (format === 'pdf') {
+                    openPrintableMeasurementsWindow(
+                        `Measurements for ${client.name}`,
+                        [client],
+                        clientMeasurements
+                    );
+                }
+            }
+        );
+    } catch (err) {
+        console.error('Error downloading client measurements:', err);
+        showToast && showToast('Failed to download measurements. Please try again.', 'error', 3000);
+    }
 });
 
 // Edit Client Form Submission

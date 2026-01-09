@@ -1,4 +1,4 @@
-# Measurement Vault
+# Tailors Vault
 
 A simple, mobile-first web application for tailors and fashion designers to quickly record and retrieve client measurements.
 

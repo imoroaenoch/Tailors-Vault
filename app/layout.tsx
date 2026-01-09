@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import './styles.css'
 
 export const metadata: Metadata = {
-  title: 'Measurement Vault',
-  description: 'Measurement Vault - Quick measurement recording for tailors',
+  title: 'Tailors Vault',
+  description: 'Tailors Vault - Quick measurement recording for tailors',
 }
 
 export default function RootLayout({

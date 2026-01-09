@@ -1083,7 +1083,7 @@ async function updateBusinessHeader() {
             headerElement.textContent = businessName;
             headerElement.setAttribute('title', businessName);
         } else {
-            headerElement.textContent = 'Measurement Vault';
+            headerElement.textContent = 'Tailors Vault';
             headerElement.removeAttribute('title');
         }
     }
@@ -1092,7 +1092,7 @@ async function updateBusinessHeader() {
 // Update business name in all navbar instances
 async function updateNavbarBusinessName() {
     const business = await getBusiness();
-    const businessName = (business && business.name && !isUserLoggedOut()) ? business.name : 'Measurement Vault';
+    const businessName = (business && business.name && !isUserLoggedOut()) ? business.name : 'Tailors Vault';
     
     document.querySelectorAll('.navbar-business-name').forEach(element => {
         element.textContent = businessName;

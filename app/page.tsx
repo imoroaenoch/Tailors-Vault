@@ -338,7 +338,7 @@ export default function Home() {
       <div id="home-screen" className="screen" style={{ display: 'none' }}>
         <nav className="top-navbar">
           <div className="navbar-content">
-            <h1 className="navbar-business-name" id="business-header-name">Measurement Vault</h1>
+            <h1 className="navbar-business-name" id="business-header-name">Tailors Vault</h1>
             <div className="navbar-actions">
               <button 
                 id="theme-toggle-btn" 
@@ -377,7 +377,7 @@ export default function Home() {
         <div className="container">
           {/* Dashboard Welcome Section */}
           <div className="dashboard-welcome">
-            <h5 className="dashboard-greeting">Hi, <span id="dashboard-business-name">Measurement Vault</span> 👋</h5>
+            <h5 className="dashboard-greeting">Hi, <span id="dashboard-business-name">Tailors Vault</span> 👋</h5>
             <h3 className="dashboard-subtext">What are you measuring today?</h3>
           </div>
 
@@ -464,7 +464,7 @@ export default function Home() {
                 <path d="M19 12H5M12 19l-7-7 7-7"/>
               </svg>
             </button>
-            <h1 className="navbar-business-name">Measurement Vault</h1>
+            <h1 className="navbar-business-name">Tailors Vault</h1>
             <div className="navbar-actions">
               <button 
                 className="btn-theme-toggle" 
@@ -641,7 +641,7 @@ export default function Home() {
                 <path d="M19 12H5M12 19l-7-7 7-7"/>
               </svg>
             </button>
-            <h1 className="navbar-business-name">Measurement Vault</h1>
+            <h1 className="navbar-business-name">Tailors Vault</h1>
             <div className="navbar-actions">
               <button 
                 className="btn-theme-toggle" 
@@ -752,7 +752,7 @@ export default function Home() {
                 <path d="M19 12H5M12 19l-7-7 7-7"/>
               </svg>
             </button>
-            <h1 className="navbar-business-name">Measurement Vault</h1>
+            <h1 className="navbar-business-name">Tailors Vault</h1>
             <div className="navbar-actions">
               <button 
                 className="btn-theme-toggle" 
@@ -923,7 +923,7 @@ export default function Home() {
                 <path d="M19 12H5M12 19l-7-7 7-7"/>
               </svg>
             </button>
-            <h1 className="navbar-business-name">Measurement Vault</h1>
+            <h1 className="navbar-business-name">Tailors Vault</h1>
             <div className="navbar-actions">
               <button 
                 className="btn-theme-toggle" 
@@ -980,7 +980,7 @@ export default function Home() {
                 <path d="M19 12H5M12 19l-7-7 7-7"/>
               </svg>
             </button>
-            <h1 className="navbar-business-name">Measurement Vault</h1>
+            <h1 className="navbar-business-name">Tailors Vault</h1>
             <div className="navbar-actions">
               <button 
                 className="btn-theme-toggle" 
@@ -1033,7 +1033,7 @@ export default function Home() {
                 <path d="M19 12H5M12 19l-7-7 7-7"/>
               </svg>
             </button>
-            <h1 className="navbar-business-name">Measurement Vault</h1>
+            <h1 className="navbar-business-name">Tailors Vault</h1>
             <div className="navbar-actions">
               <button 
                 className="btn-theme-toggle" 
@@ -1075,6 +1075,8 @@ export default function Home() {
               <button id="client-menu-btn" className="btn-menu" aria-label="Client actions">⋮</button>
               <div id="client-menu-dropdown" className="menu-dropdown">
                 <button id="edit-client-btn" className="menu-item">Edit Client</button>
+                <button id="add-measurement-menu-btn" className="menu-item">Add Measurement</button>
+                <button id="download-measurements-menu-btn" className="menu-item">Download Measurements</button>
                 <button id="delete-client-btn" className="menu-item menu-item-danger">Delete Client</button>
               </div>
             </div>
@@ -1109,7 +1111,7 @@ export default function Home() {
                 <path d="M19 12H5M12 19l-7-7 7-7"/>
               </svg>
             </button>
-            <h1 className="navbar-business-name">Measurement Vault</h1>
+            <h1 className="navbar-business-name">Tailors Vault</h1>
             <div className="navbar-actions">
               <button 
                 className="btn-theme-toggle" 
@@ -1188,7 +1190,7 @@ export default function Home() {
                 <path d="M19 12H5M12 19l-7-7 7-7"/>
               </svg>
             </button>
-            <h1 className="navbar-business-name">Measurement Vault</h1>
+            <h1 className="navbar-business-name">Tailors Vault</h1>
             <div className="navbar-actions">
               <button 
                 className="btn-theme-toggle" 

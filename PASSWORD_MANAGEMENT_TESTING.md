@@ -1,6 +1,6 @@
 # Password Management Testing Guide
 
-This guide explains how to test the password management features in the Measurement Vault app.
+This guide explains how to test the password management features in the Tailors Vault app.
 
 ## Features Implemented
 

@@ -1,4 +1,4 @@
--- Measurement Vault Database Schema
+-- Tailors Vault Database Schema
 -- Run this in your Supabase SQL Editor
 
 -- Businesses table (single row per project, but structured as table for future multi-tenancy)
