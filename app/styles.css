@@ -2126,7 +2126,118 @@ textarea {
         width: 28px;
         height: 28px;
         font-size: 16px;
+        padding: 4px;
     }
+}
+
+/* Client List Menu Button */
+.client-leaderboard-card .client-list-menu-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 18px;
+    padding: 6px;
+    flex-shrink: 0;
+}
+
+.client-leaderboard-card .client-menu-wrapper {
+    position: relative;
+}
+
+.client-leaderboard-card .client-list-dropdown {
+    min-width: 180px;
+}
+
+/* Client Card Checkbox */
+.client-card-checkbox {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 4px;
+}
+
+.client-select-checkbox {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+    border-radius: 50%;
+    appearance: none;
+    -webkit-appearance: none;
+    border: 2px solid var(--border-color);
+    background-color: transparent;
+    position: relative;
+    transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.client-select-checkbox:hover {
+    border-color: var(--accent-yellow);
+}
+
+.client-select-checkbox:checked {
+    background-color: var(--accent-yellow);
+    border-color: var(--accent-yellow);
+}
+
+.client-select-checkbox:checked::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--bg-card);
+}
+
+/* Dark mode: darker checkbox that blends with dark backgrounds */
+[data-theme="dark"] .client-select-checkbox {
+    border-color: rgba(255, 255, 255, 0.2);
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+[data-theme="dark"] .client-select-checkbox:hover {
+    border-color: var(--accent-yellow);
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="dark"] .client-select-checkbox:checked {
+    background-color: var(--accent-yellow);
+    border-color: var(--accent-yellow);
+}
+
+[data-theme="dark"] .client-select-checkbox:checked::after {
+    background-color: #1a1a1a;
+}
+
+/* Bulk Actions Bar */
+.clients-bulk-actions {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background-color: var(--bg-card);
+    border-bottom: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    gap: 12px;
+}
+
+.bulk-actions-info {
+    font-size: 14px;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+#bulk-delete-clients-btn {
+    padding: 8px 16px;
+    font-size: 14px;
+}
+
+.btn-sm {
+    padding: 6px 12px;
+    font-size: 13px;
 }
 
 /* Measurement Records List */
