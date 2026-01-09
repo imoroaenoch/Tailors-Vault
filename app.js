@@ -14,6 +14,12 @@ const CURRENT_BUSINESS_ID_KEY = 'measurement_vault_current_business_id';
 // Device ID key (unique per device, never changes)
 const DEVICE_ID_KEY = 'measurement_vault_device_id';
 
+// Measurement draft key (for persisting in-progress measurements)
+const MEASUREMENT_DRAFT_KEY = 'measurement_vault_draft';
+
+// Screen Wake Lock for measurement flow
+let wakeLock = null;
+
 // Garment Types by Sex (including Custom option)
 const GARMENT_TYPES = {
     Male: [
@@ -377,6 +383,12 @@ function logoutBusiness() {
     // Clear current business session ID
     localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
     
+    // Clear measurement draft on logout
+    clearMeasurementDraft();
+    
+    // Release wake lock on logout
+    deactivateMeasurementWakeLock();
+    
     // Set logged out state in localStorage (persists across refreshes)
     // This ensures that after logout, refreshing or reopening the app always shows Business Registration
     localStorage.setItem(LOGOUT_STATE_KEY, 'true');
@@ -459,6 +471,8 @@ async function initStorage() {
     // Step 1: Check if user is logged out (check localStorage for measurement_vault_logged_out)
     // If logged out, always show Business Registration screen (regardless of existing business)
     if (isUserLoggedOut()) {
+        // Clear any draft on logout
+        clearMeasurementDraft();
         showScreen('business-setup-screen');
         return false;
     }
@@ -466,13 +480,22 @@ async function initStorage() {
     // Step 2: User is not logged out - check if business exists in Supabase
     const hasBiz = await hasBusiness();
     if (!hasBiz) {
-        // No business exists - show business registration screen
+        // No business exists - clear draft and show business registration screen
+        clearMeasurementDraft();
         showScreen('business-setup-screen');
         return false;
     }
     
-    // Step 3: Valid session exists - user is logged in and business exists
-    // Continue to dashboard (normal flow)
+    // Step 3: Check for active measurement session BEFORE showing dashboard
+    // If active session exists, we'll restore it instead of showing dashboard
+    const hasActiveSession = hasActiveMeasurementSession();
+    if (hasActiveSession) {
+        // Don't show dashboard - let checkAndRestoreDraft handle navigation
+        // Return true to indicate valid session, but don't show dashboard yet
+        return true;
+    }
+    
+    // Step 4: Valid session exists, no active measurement - continue to dashboard (normal flow)
     return true;
 }
 
@@ -962,6 +985,9 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
 
 // Edit measurement
 async function editMeasurement(measurementId, clientId) {
+    // Clear any existing draft when editing (we're loading specific measurement data)
+    clearMeasurementDraft();
+    
     const measurements = await getMeasurements();
     const clients = await getClients();
     
@@ -1044,6 +1070,7 @@ async function editMeasurement(measurementId, clientId) {
     
     // Show measurement form
     showScreen('new-measurement-screen');
+    setupMeasurementDraftAutoSave();
 }
 
 // Delete measurement
@@ -1106,6 +1133,16 @@ async function updateNavbarBusinessName() {
 
 // Screen Navigation
 function showScreen(screenId) {
+    // Save draft before navigating away from measurement screen
+    const currentScreen = document.querySelector('.screen.active');
+    if (currentScreen && currentScreen.id === 'new-measurement-screen') {
+        saveMeasurementDraft();
+        // Stop auto-save if navigating away from measurement screen
+        if (screenId !== 'new-measurement-screen') {
+            stopMeasurementDraftAutoSave();
+        }
+    }
+    
     document.querySelectorAll('.screen').forEach(screen => {
         screen.classList.remove('active');
     });
@@ -1118,14 +1155,38 @@ function showScreen(screenId) {
     
     // Update business name in all navbar instances
     updateNavbarBusinessName();
+    
+    // Setup auto-save and wake lock if navigating to measurement screen
+    if (screenId === 'new-measurement-screen') {
+        // Small delay to ensure form is ready
+        setTimeout(() => {
+            setupMeasurementDraftAutoSave();
+            // Activate wake lock to prevent screen sleep during measurements
+            activateMeasurementWakeLock();
+        }, 100);
+    } else {
+        // Deactivate wake lock when navigating away from measurement screen
+        deactivateMeasurementWakeLock();
+    }
 }
 
 // Navigation Event Listeners
 document.getElementById('new-measurement-btn').addEventListener('click', () => {
-    resetMeasurementForm();
-    document.querySelector('#new-measurement-screen h2').textContent = 'New Measurement';
-    showScreen('new-measurement-screen');
-    document.getElementById('client-name').focus();
+    // Check if there's a draft - if so, restore it instead of resetting
+    const draft = loadMeasurementDraft();
+    if (draft) {
+        // Restore draft
+        restoreMeasurementDraft(draft);
+        showScreen('new-measurement-screen');
+        // Auto-save and wake lock are set up by showScreen function
+    } else {
+        // No draft - start fresh
+        resetMeasurementForm();
+        document.querySelector('#new-measurement-screen h2').textContent = 'New Measurement';
+        showScreen('new-measurement-screen');
+        document.getElementById('client-name').focus();
+        // Auto-save and wake lock are set up by showScreen function
+    }
 });
 
 document.getElementById('search-measurements-btn').addEventListener('click', () => {
@@ -1230,10 +1291,23 @@ document.getElementById('measurement-form').addEventListener('submit', async (e)
     }
     
     // Save measurement (create or update)
-    await saveMeasurement(client.id, formData, currentMeasurementId);
+    const savedMeasurement = await saveMeasurement(client.id, formData, currentMeasurementId);
     
-    // Reset form
-    resetMeasurementForm();
+    // Only clear draft and reset form if save was successful
+    if (savedMeasurement) {
+        // Clear draft after successful save
+        clearMeasurementDraft();
+        
+        // Release wake lock after successful save
+        deactivateMeasurementWakeLock();
+        
+        // Reset form
+        resetMeasurementForm();
+    } else {
+        // Save failed - keep draft so user doesn't lose data
+        saveMeasurementDraft();
+        return; // Don't navigate away if save failed
+    }
     
     // Return to appropriate screen
     if (currentClientId && currentClientId === client.id) {
@@ -1247,7 +1321,7 @@ document.getElementById('measurement-form').addEventListener('submit', async (e)
 });
 
 // Reset measurement form
-function resetMeasurementForm() {
+function resetMeasurementForm(clearDraft = true) {
     document.getElementById('measurement-form').reset();
     document.getElementById('client-name').disabled = false;
     document.getElementById('client-sex').disabled = false;
@@ -1279,6 +1353,161 @@ function resetMeasurementForm() {
             fieldElement.closest('.form-group').style.display = 'none';
         }
     });
+    
+    // Clear draft when form is explicitly reset (unless explicitly told not to)
+    if (clearDraft) {
+        clearMeasurementDraft();
+    }
+}
+
+// Auto-save interval (for continuous saving while on measurement screen)
+let measurementDraftAutoSaveInterval = null;
+
+// Setup auto-save for measurement draft
+function setupMeasurementDraftAutoSave() {
+    // Clear any existing interval
+    if (measurementDraftAutoSaveInterval) {
+        clearInterval(measurementDraftAutoSaveInterval);
+        measurementDraftAutoSaveInterval = null;
+    }
+    
+    // Get all form inputs
+    const formInputs = [
+        'client-name', 'phone-number', 'client-sex', 'garment-type', 
+        'custom-garment-name', 'shoulder', 'chest', 'waist', 'sleeve', 
+        'length', 'neck', 'hip', 'inseam', 'thigh', 'seat', 'notes'
+    ];
+    
+    // Add input/change listeners for auto-save
+    formInputs.forEach(inputId => {
+        const input = document.getElementById(inputId);
+        if (input) {
+            // Use debounced save to avoid excessive writes
+            let saveTimeout;
+            const saveHandler = () => {
+                clearTimeout(saveTimeout);
+                saveTimeout = setTimeout(() => {
+                    saveMeasurementDraft();
+                }, 500); // Save 500ms after user stops typing
+            };
+            
+            input.addEventListener('input', saveHandler);
+            input.addEventListener('change', saveHandler);
+        }
+    });
+    
+    // Also save when custom fields change
+    const customFieldsContainer = document.getElementById('custom-fields-container');
+    if (customFieldsContainer) {
+        // Use MutationObserver to detect when custom fields are added/removed
+        const observer = new MutationObserver(() => {
+            saveMeasurementDraft();
+        });
+        observer.observe(customFieldsContainer, {
+            childList: true,
+            subtree: true
+        });
+        
+        // Also listen to input events on custom fields
+        customFieldsContainer.addEventListener('input', () => {
+            saveMeasurementDraft();
+        }, true);
+    }
+    
+    // Set up continuous periodic save (every 5 seconds) while on measurement screen
+    // This ensures data is saved even if user doesn't type
+    measurementDraftAutoSaveInterval = setInterval(() => {
+        const activeScreen = document.querySelector('.screen.active');
+        if (activeScreen && activeScreen.id === 'new-measurement-screen') {
+            saveMeasurementDraft();
+        } else {
+            // Not on measurement screen anymore - stop periodic save
+            if (measurementDraftAutoSaveInterval) {
+                clearInterval(measurementDraftAutoSaveInterval);
+                measurementDraftAutoSaveInterval = null;
+            }
+        }
+    }, 5000); // Save every 5 seconds
+}
+
+// Stop auto-save interval
+function stopMeasurementDraftAutoSave() {
+    if (measurementDraftAutoSaveInterval) {
+        clearInterval(measurementDraftAutoSaveInterval);
+        measurementDraftAutoSaveInterval = null;
+    }
+}
+
+// ========== SCREEN WAKE LOCK MANAGEMENT ==========
+// Check if Screen Wake Lock API is supported
+function isWakeLockSupported() {
+    return 'wakeLock' in navigator;
+}
+
+// Request screen wake lock (prevents screen from sleeping)
+async function requestWakeLock() {
+    // Fail gracefully if not supported
+    if (!isWakeLockSupported()) {
+        return false;
+    }
+    
+    try {
+        // Release any existing wake lock first
+        if (wakeLock) {
+            await releaseWakeLock();
+        }
+        
+        // Request wake lock
+        wakeLock = await navigator.wakeLock.request('screen');
+        
+        // Handle wake lock release (e.g., user manually locks screen)
+        wakeLock.addEventListener('release', () => {
+            console.log('Wake lock was released');
+            wakeLock = null;
+        });
+        
+        return true;
+    } catch (err) {
+        // Fail gracefully - wake lock is optional
+        console.warn('Wake lock request failed (this is optional):', err);
+        wakeLock = null;
+        return false;
+    }
+}
+
+// Release screen wake lock
+async function releaseWakeLock() {
+    if (!wakeLock) {
+        return;
+    }
+    
+    try {
+        await wakeLock.release();
+        wakeLock = null;
+    } catch (err) {
+        console.warn('Wake lock release failed:', err);
+        wakeLock = null;
+    }
+}
+
+// Request wake lock when entering measurement screen
+function activateMeasurementWakeLock() {
+    if (isWakeLockSupported()) {
+        requestWakeLock().catch(err => {
+            // Silently fail - wake lock is optional
+            console.warn('Could not activate wake lock:', err);
+        });
+    }
+}
+
+// Release wake lock when exiting measurement screen
+function deactivateMeasurementWakeLock() {
+    if (wakeLock) {
+        releaseWakeLock().catch(err => {
+            // Silently fail
+            console.warn('Could not deactivate wake lock:', err);
+        });
+    }
 }
 
 // Event listeners for form fields
@@ -1287,6 +1516,7 @@ document.getElementById('client-name').addEventListener('blur', checkExistingCli
 
 document.getElementById('client-sex').addEventListener('change', (e) => {
     updateGarmentTypes(e.target.value);
+    saveMeasurementDraft(); // Save draft when sex changes
 });
 
 // Add Measurement button from Client Detail View
@@ -1305,6 +1535,9 @@ document.getElementById('add-measurement-from-details-btn').addEventListener('cl
         alert('Client not found');
         return;
     }
+    
+    // Clear any existing draft when starting new measurement for specific client
+    clearMeasurementDraft();
     
     // Reset form first
     resetMeasurementForm();
@@ -1332,6 +1565,7 @@ document.getElementById('add-measurement-from-details-btn').addEventListener('cl
     
     // Show measurement form
     showScreen('new-measurement-screen');
+    // Auto-save and wake lock are set up by showScreen function
 });
 
 // Garment type change listener
@@ -1344,14 +1578,31 @@ document.getElementById('garment-type').addEventListener('change', async (e) => 
 
 // Update back button from new measurement
 document.getElementById('back-from-new-btn').addEventListener('click', async () => {
+    // Ask user if they want to cancel the measurement
+    const hasData = hasActiveMeasurementSession();
+    if (hasData) {
+        const confirmCancel = confirm('You have unsaved measurement data. Are you sure you want to cancel? Your progress will be saved as a draft.');
+        if (!confirmCancel) {
+            return; // User chose not to cancel
+        }
+    }
+    
+    // Save draft before navigating away (in case user comes back)
+    saveMeasurementDraft();
+    
+    // Release wake lock when user cancels measurement
+    deactivateMeasurementWakeLock();
+    
     if (currentClientId) {
         // If we were adding/editing from client detail view, return there
         const clientId = currentClientId;
-        resetMeasurementForm();
+        // Clear draft when explicitly navigating away (user cancelled)
+        clearMeasurementDraft();
         await showClientDetails(clientId, previousScreen);
     } else {
         // Normal flow - return to home
-        resetMeasurementForm();
+        // Clear draft when explicitly navigating away (user cancelled)
+        clearMeasurementDraft();
         showScreen('home-screen');
         await renderRecentMeasurements();
     }
@@ -2685,6 +2936,255 @@ function addCustomFieldRow(fieldName = '', fieldValue = '') {
     }
 }
 
+// ========== MEASUREMENT DRAFT PERSISTENCE ==========
+// Save measurement draft to localStorage (includes screen state)
+function saveMeasurementDraft() {
+    try {
+        const form = document.getElementById('measurement-form');
+        if (!form) return;
+        
+        // Get current active screen
+        const activeScreen = document.querySelector('.screen.active');
+        const currentScreenId = activeScreen ? activeScreen.id : null;
+        
+        // Check if we're on the measurement screen
+        const isOnMeasurementScreen = currentScreenId === 'new-measurement-screen';
+        
+        // Only save if we're on the measurement screen
+        if (!isOnMeasurementScreen) {
+            // If we're not on measurement screen, don't save (but don't clear existing draft)
+            return;
+        }
+        
+        // Collect all form data
+        const draft = {
+            // Screen state
+            screenId: 'new-measurement-screen',
+            timestamp: Date.now(),
+            
+            // Form data
+            clientName: document.getElementById('client-name')?.value || '',
+            phone: document.getElementById('phone-number')?.value || '',
+            sex: document.getElementById('client-sex')?.value || '',
+            garmentType: document.getElementById('garment-type')?.value || '',
+            customGarmentName: document.getElementById('custom-garment-name')?.value || '',
+            shoulder: document.getElementById('shoulder')?.value || '',
+            chest: document.getElementById('chest')?.value || '',
+            waist: document.getElementById('waist')?.value || '',
+            sleeve: document.getElementById('sleeve')?.value || '',
+            length: document.getElementById('length')?.value || '',
+            neck: document.getElementById('neck')?.value || '',
+            hip: document.getElementById('hip')?.value || '',
+            inseam: document.getElementById('inseam')?.value || '',
+            thigh: document.getElementById('thigh')?.value || '',
+            seat: document.getElementById('seat')?.value || '',
+            notes: document.getElementById('notes')?.value || '',
+            clientNameDisabled: document.getElementById('client-name')?.disabled || false,
+            clientSexDisabled: document.getElementById('client-sex')?.disabled || false,
+            currentClientId: currentClientId,
+            currentMeasurementId: currentMeasurementId,
+            // Save custom fields
+            customFields: []
+        };
+        
+        // Collect custom fields
+        const customFieldGroups = document.querySelectorAll('#custom-fields-container .custom-field-group');
+        customFieldGroups.forEach(group => {
+            const input = group.querySelector('.custom-field-input');
+            if (input) {
+                const fieldName = input.getAttribute('data-field-name');
+                const fieldValue = input.value || '';
+                if (fieldName) {
+                    draft.customFields.push({
+                        name: fieldName,
+                        value: fieldValue
+                    });
+                }
+            }
+        });
+        
+        // Always save if we're on measurement screen (even if empty, to track active session)
+        // This ensures we know there's an active measurement session
+        localStorage.setItem(MEASUREMENT_DRAFT_KEY, JSON.stringify(draft));
+    } catch (err) {
+        console.warn('Error saving measurement draft:', err);
+    }
+}
+
+// Load measurement draft from localStorage
+function loadMeasurementDraft() {
+    try {
+        const draftJson = localStorage.getItem(MEASUREMENT_DRAFT_KEY);
+        if (!draftJson) return null;
+        
+        return JSON.parse(draftJson);
+    } catch (err) {
+        console.warn('Error loading measurement draft:', err);
+        return null;
+    }
+}
+
+// Clear measurement draft
+function clearMeasurementDraft() {
+    try {
+        localStorage.removeItem(MEASUREMENT_DRAFT_KEY);
+    } catch (err) {
+        console.warn('Error clearing measurement draft:', err);
+    }
+}
+
+// Restore measurement draft to form
+function restoreMeasurementDraft(draft) {
+    if (!draft) return false;
+    
+    try {
+        // Restore basic fields
+        if (draft.clientName !== undefined) {
+            const clientNameInput = document.getElementById('client-name');
+            if (clientNameInput) {
+                clientNameInput.value = draft.clientName || '';
+                clientNameInput.disabled = draft.clientNameDisabled || false;
+            }
+        }
+        
+        if (draft.phone !== undefined) {
+            const phoneInput = document.getElementById('phone-number');
+            if (phoneInput) phoneInput.value = draft.phone || '';
+        }
+        
+        if (draft.sex) {
+            const sexSelect = document.getElementById('client-sex');
+            if (sexSelect) {
+                sexSelect.value = draft.sex;
+                sexSelect.disabled = draft.clientSexDisabled || false;
+                sexSelect.required = !draft.clientSexDisabled;
+                updateGarmentTypes(draft.sex);
+            }
+        }
+        
+        if (draft.garmentType) {
+            const garmentSelect = document.getElementById('garment-type');
+            if (garmentSelect) {
+                if (draft.garmentType === 'Custom' && draft.customGarmentName) {
+                    garmentSelect.value = 'Custom';
+                    handleCustomGarmentVisibility('Custom');
+                    const customGarmentInput = document.getElementById('custom-garment-name');
+                    if (customGarmentInput) customGarmentInput.value = draft.customGarmentName;
+                    updateMeasurementFields('Custom');
+                } else {
+                    garmentSelect.value = draft.garmentType;
+                    updateMeasurementFields(draft.garmentType);
+                }
+                handleAddFieldButtonVisibility(draft.garmentType);
+            }
+        }
+        
+        // Restore measurement fields
+        const measurementFields = ['shoulder', 'chest', 'waist', 'sleeve', 'length', 'neck', 'hip', 'inseam', 'thigh', 'seat'];
+        measurementFields.forEach(field => {
+            if (draft[field] !== undefined) {
+                const fieldInput = document.getElementById(field);
+                if (fieldInput) fieldInput.value = draft[field] || '';
+            }
+        });
+        
+        // Restore notes
+        if (draft.notes !== undefined) {
+            const notesTextarea = document.getElementById('notes');
+            if (notesTextarea) notesTextarea.value = draft.notes || '';
+        }
+        
+        // Restore custom fields
+        if (draft.customFields && Array.isArray(draft.customFields)) {
+            const customFieldsContainer = document.getElementById('custom-fields-container');
+            if (customFieldsContainer) {
+                customFieldsContainer.innerHTML = '';
+                draft.customFields.forEach(field => {
+                    if (field.name) {
+                        addCustomFieldInline(field.name, field.value);
+                    }
+                });
+            }
+        }
+        
+        // Restore current IDs
+        if (draft.currentClientId) {
+            currentClientId = draft.currentClientId;
+        }
+        if (draft.currentMeasurementId) {
+            currentMeasurementId = draft.currentMeasurementId;
+            const header = document.querySelector('#new-measurement-screen h2');
+            if (header) header.textContent = 'Edit Measurement';
+        }
+        
+        // Update draft timestamp to prevent expiration
+        draft.timestamp = Date.now();
+        localStorage.setItem(MEASUREMENT_DRAFT_KEY, JSON.stringify(draft));
+        
+        return true;
+    } catch (err) {
+        console.warn('Error restoring measurement draft:', err);
+        return false;
+    }
+}
+
+// Check for draft and restore on app initialization
+async function checkAndRestoreDraft() {
+    const draft = loadMeasurementDraft();
+    if (!draft) return false;
+    
+    // Only restore if we have a valid business session
+    const hasBiz = await hasBusiness();
+    if (!hasBiz || isUserLoggedOut()) {
+        // Clear draft if no valid session
+        clearMeasurementDraft();
+        return false;
+    }
+    
+    // Check if draft is recent (within last 7 days) to avoid restoring very old drafts
+    const draftAge = Date.now() - (draft.timestamp || 0);
+    const MAX_DRAFT_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+    if (draftAge > MAX_DRAFT_AGE) {
+        // Draft is too old, clear it
+        clearMeasurementDraft();
+        return false;
+    }
+    
+    // Restore the draft
+    const restored = restoreMeasurementDraft(draft);
+    if (restored) {
+        // Navigate to measurement screen (don't redirect to dashboard)
+        showScreen('new-measurement-screen');
+        // Setup auto-save immediately
+        setupMeasurementDraftAutoSave();
+        // Wake lock will be activated by showScreen function
+        return true;
+    }
+    
+    return false;
+}
+
+// Check if there's an active measurement session
+function hasActiveMeasurementSession() {
+    const draft = loadMeasurementDraft();
+    if (!draft) return false;
+    
+    // Check if draft is recent (within last 7 days)
+    const draftAge = Date.now() - (draft.timestamp || 0);
+    const MAX_DRAFT_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+    if (draftAge > MAX_DRAFT_AGE) {
+        return false;
+    }
+    
+    // Check if there's meaningful data
+    const hasData = draft.clientName || draft.phone || draft.sex || draft.garmentType || 
+                   draft.shoulder || draft.chest || draft.waist || draft.sleeve || 
+                   draft.length || draft.neck || draft.hip || draft.inseam || 
+                   draft.thigh || draft.seat || draft.notes || (draft.customFields && draft.customFields.length > 0);
+    
+    return hasData;
+}
+
 // Initialize app
 function initializeApp() {
     // Initialize device ID early (must happen before any business checks)
@@ -2722,14 +3222,70 @@ function initializeApp() {
         if (appInitialized) {
             await updateBusinessHeader();
             await updateNavbarBusinessName();
-            showScreen('home-screen');
-            await renderRecentMeasurements();
             
-            // Reset measurement form if business exists
-            resetMeasurementForm();
+            // ALWAYS check for draft first - if it exists, restore it and DON'T show dashboard
+            const draftRestored = await checkAndRestoreDraft();
+            if (!draftRestored) {
+                // No active measurement session - show home screen (dashboard)
+                showScreen('home-screen');
+                await renderRecentMeasurements();
+                
+                // Reset measurement form if business exists (but don't clear draft if it exists)
+                resetMeasurementForm(false);
+            } else {
+                // Draft was restored - measurement screen is already shown
+                // Activate wake lock for restored measurement session
+                activateMeasurementWakeLock();
+            }
         }
     })();
 }
+
+// Handle page visibility changes (app backgrounding/resuming)
+document.addEventListener('visibilitychange', () => {
+    // Save draft when app goes to background
+    if (document.hidden) {
+        saveMeasurementDraft();
+        // Release wake lock when app goes to background (battery saving)
+        deactivateMeasurementWakeLock();
+    } else {
+        // App resumed - check if we're on measurement screen and restore if needed
+        const measurementScreen = document.getElementById('new-measurement-screen');
+        if (measurementScreen && measurementScreen.classList.contains('active')) {
+            // Already on measurement screen - ensure auto-save is set up
+            setupMeasurementDraftAutoSave();
+            // Save immediately on resume
+            saveMeasurementDraft();
+            // Re-request wake lock when app comes back to foreground on measurement screen
+            activateMeasurementWakeLock();
+        } else {
+            // Check if there's a draft and we should be on measurement screen
+            const draft = loadMeasurementDraft();
+            if (draft && draft.screenId === 'new-measurement-screen') {
+                // Restore draft and navigate to measurement screen
+                const restored = restoreMeasurementDraft(draft);
+                if (restored) {
+                    showScreen('new-measurement-screen');
+                    setupMeasurementDraftAutoSave();
+                    // Activate wake lock when restoring to measurement screen
+                    activateMeasurementWakeLock();
+                }
+            }
+        }
+    }
+});
+
+// Handle page unload (browser close, refresh, etc.)
+window.addEventListener('beforeunload', () => {
+    saveMeasurementDraft();
+    // Release wake lock on page unload
+    deactivateMeasurementWakeLock();
+});
+
+// Handle page focus/blur (additional safety net)
+window.addEventListener('blur', () => {
+    saveMeasurementDraft();
+});
 
 // Wait for DOM to be ready
 if (document.readyState === 'loading') {
