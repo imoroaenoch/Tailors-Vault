@@ -474,14 +474,14 @@ async function getBusiness(useCache = true) {
     }
     
     try {
-        // Query business by user_id only - NO fallbacks
-        const { data, error } = await supabase
-            .from('businesses')
-            .select('*')
-            .eq('user_id', user.id)
-            .limit(1)
-            .single();
-        
+    // Query business by user_id only - NO fallbacks
+    const { data, error } = await supabase
+        .from('businesses')
+        .select('*')
+        .eq('user_id', user.id)
+        .limit(1)
+        .single();
+    
         if (error) {
             console.warn('[getBusiness] Supabase query error:', error);
             // Return cached business if available
@@ -490,23 +490,23 @@ async function getBusiness(useCache = true) {
         
         if (!data) {
             return cachedBusiness || null;
-        }
-        
-        // Return business data
-        const business = {
-            id: data.id,
-            name: data.name,
-            email: data.email || null,
-            phone: data.phone,
-            createdAt: data.created_at
-        };
-        
+    }
+    
+    // Return business data
+    const business = {
+        id: data.id,
+        name: data.name,
+        email: data.email || null,
+        phone: data.phone,
+        createdAt: data.created_at
+    };
+    
         // Cache the result (both in-memory and localStorage)
-        businessDataCache = business;
-        businessDataCacheTime = Date.now();
+    businessDataCache = business;
+    businessDataCacheTime = Date.now();
         setCachedBusiness(business);
-        
-        return business;
+    
+    return business;
     } catch (err) {
         console.warn('[getBusiness] Network error:', err);
         // Return cached business if available
@@ -606,18 +606,22 @@ async function updateBusiness(name, email, phone) {
             return null;
         }
         
-        // Clear cache after update
-        clearBusinessCache();
-        
         // Convert to match old format
-        return {
+        const updatedBusiness = {
             id: data.id,
             name: data.name,
             email: data.email,
             phone: data.phone,
-        email_verified: data.email_verified || false,
+            email_verified: data.email_verified || false,
             createdAt: data.created_at
         };
+        
+        // Update cache with new data immediately (don't clear - update with new values)
+        setCachedBusiness(updatedBusiness);
+        businessDataCache = updatedBusiness;
+        businessDataCacheTime = Date.now();
+        
+        return updatedBusiness;
 }
 
 // ========== EMAIL LINKING FUNCTIONS ==========
@@ -1156,9 +1160,9 @@ async function logoutBusiness() {
     
     // Sign out from Supabase (this clears auth session)
     try {
-        const supabase = await getSupabaseAsync();
+    const supabase = await getSupabaseAsync();
         if (supabase && isOnline()) {
-            await supabase.auth.signOut();
+        await supabase.auth.signOut();
         }
     } catch (err) {
         console.warn('[Logout] Error signing out from Supabase:', err);
@@ -1391,17 +1395,68 @@ async function saveClients(clients) {
 
 // Update client
 async function updateClient(clientId, name, phone, sex) {
-    // Update cache immediately (optimistic)
-    const cachedClient = clientsCache?.find(c => c.id === clientId);
-    const optimisticUpdate = {
+    const user = await getCurrentUser();
+    if (!user) {
+        console.error('[UpdateClient] No user found');
+        return null;
+    }
+    
+    // Find client in IndexedDB first to get local_id
+    let client = null;
+    try {
+        client = await window.indexedDBHelper.getClientLocal(clientId, user.id);
+    } catch (err) {
+        console.error('[UpdateClient] Error finding client in IndexedDB:', err);
+        // Try to find in cache as fallback
+        client = clientsCache?.find(c => c.id === clientId);
+    }
+    
+    if (!client) {
+        console.error('[UpdateClient] Client not found:', clientId);
+        return null;
+    }
+    
+    // Prepare update data
+    const updateData = {
         name: name.trim(),
         phone: phone ? phone.trim() : '',
         sex: sex || ''
     };
     
-    if (cachedClient) {
-        updateClientInCache(clientId, optimisticUpdate);
+    // Update IndexedDB immediately (local-first)
+    let updatedClient = null;
+    try {
+        if (client.local_id && window.indexedDBHelper) {
+            updatedClient = await window.indexedDBHelper.updateClientLocal(client.local_id, updateData, user.id);
+            // Normalize the returned client
+            updatedClient = {
+                id: updatedClient.id || client.server_id || client.local_id,
+                server_id: client.server_id || null,
+                local_id: updatedClient.local_id || client.local_id,
+                business_id: client.business_id,
+                user_id: client.user_id,
+                name: updatedClient.name,
+                phone: updatedClient.phone || '',
+                sex: updatedClient.sex || '',
+                createdAt: updatedClient.createdAt || client.createdAt,
+                synced: updatedClient.synced !== undefined ? updatedClient.synced : false
+            };
+        }
+    } catch (err) {
+        console.error('[UpdateClient] Error updating client in IndexedDB:', err);
+        // Continue with cache update even if IndexedDB update fails
     }
+    
+    // If IndexedDB update failed, create updated client from existing
+    if (!updatedClient) {
+        updatedClient = {
+            ...client,
+            ...updateData
+        };
+    }
+    
+    // Update cache immediately
+    updateClientInCache(clientId, updatedClient);
     
     // Sync with Supabase in background (non-blocking) or queue if offline
     (async () => {
@@ -1429,30 +1484,42 @@ async function updateClient(clientId, name, phone, sex) {
         }
     
         try {
-    const { data, error } = await supabase
-        .from('clients')
-        .update({
-            name: name.trim(),
-            phone: phone ? phone.trim() : null,
-            sex: sex || null
-        })
-        .eq('id', clientId)
-        .select()
-        .single();
-    
-    if (error) {
+            const { data, error } = await supabase
+                .from('clients')
+                .update({
+                    name: name.trim(),
+                    phone: phone ? phone.trim() : null,
+                    sex: sex || null
+                })
+                .eq('id', clientId)
+                .select()
+                .single();
+        
+            if (error) {
                 throw error;
-    }
-    
-            // Update cache with real data
-            if (data && cachedClient) {
-                updateClientInCache(clientId, {
-        id: data.id,
-        name: data.name,
-        phone: data.phone || '',
-        sex: data.sex || '',
-        createdAt: data.created_at
-                });
+            }
+        
+            // Update IndexedDB and cache with server response (mark as synced)
+            if (data && client.local_id && window.indexedDBHelper) {
+                try {
+                    await window.indexedDBHelper.updateClientLocal(client.local_id, {
+                        name: data.name,
+                        phone: data.phone || '',
+                        sex: data.sex || '',
+                        synced: true
+                    }, user.id);
+                    
+                    // Update cache with synced data
+                    updateClientInCache(clientId, {
+                        id: data.id,
+                        name: data.name,
+                        phone: data.phone || '',
+                        sex: data.sex || '',
+                        synced: true
+                    });
+                } catch (err) {
+                    console.error('[UpdateClient] Error updating IndexedDB after sync:', err);
+                }
             }
         } catch (err) {
             console.error('Error updating client in background:', err);
@@ -1466,12 +1533,8 @@ async function updateClient(clientId, name, phone, sex) {
         }
     })();
     
-    // Return optimistic client immediately
-    return cachedClient ? { ...cachedClient, ...optimisticUpdate } : {
-        id: clientId,
-        ...optimisticUpdate,
-        createdAt: cachedClient?.createdAt || new Date().toISOString()
-    };
+    // Return updated client immediately (from IndexedDB update)
+    return updatedClient;
 }
 
 // Delete client and all associated measurements - uses user_id, requires internet
@@ -1481,34 +1544,33 @@ async function deleteClient(clientId) {
         throw new Error('You must be logged in to delete a client.');
     }
     
-    const supabase = await getSupabaseAsync();
-    if (!supabase) {
-        throw new Error('Database connection not available');
-    }
-    
-    // Check if offline
-    if (!isOnline()) {
-        throw new Error('Internet connection required. Please check your connection and try again.');
+    // Initialize IndexedDB if needed
+    if (!window.indexedDBHelper) {
+        await window.indexedDBHelper.initDB();
     }
     
     try {
-    // Delete measurements first (cascade should handle this, but being explicit)
-    await supabase
-        .from('measurements')
-        .delete()
-            .eq('client_id', clientId)
-            .eq('user_id', user.id); // Ensure user owns these measurements
-    
-    // Delete client
-        const { error } = await supabase
-        .from('clients')
-        .delete()
-            .eq('id', clientId)
-            .eq('user_id', user.id); // Ensure user owns this client
-            
-        if (error) {
-            throw error;
+        // LOCAL-FIRST: Delete from IndexedDB first
+        // Find client by local_id or server_id to get local_id
+        const client = await window.indexedDBHelper.getClientLocal(clientId, user.id);
+        if (!client) {
+            throw new Error('Client not found');
         }
+        
+        const localId = client.local_id;
+        
+        // Delete all measurements for this client from IndexedDB first
+        const measurements = await window.indexedDBHelper.getMeasurementsByBusinessId(client.business_id, clientId);
+        for (const measurement of measurements) {
+            try {
+                await window.indexedDBHelper.deleteMeasurementLocal(measurement.local_id, user.id);
+            } catch (err) {
+                console.warn('[DeleteClient] Error deleting measurement from IndexedDB:', err);
+            }
+        }
+        
+        // Delete client from IndexedDB
+        await window.indexedDBHelper.deleteClientLocal(localId, user.id);
         
         // Remove from cache
         removeClientFromCache(clientId);
@@ -1517,18 +1579,54 @@ async function deleteClient(clientId) {
             setCachedMeasurements(measurementsCache);
         }
         
-        // Update UI
+        // Update UI immediately
         if (typeof renderClientsList === 'function') {
             renderClientsList();
         }
         
         showToast('Client deleted', 'success', 2000);
+        
+        // Sync deletion to Supabase if online (non-blocking)
+        if (isOnline()) {
+            (async () => {
+                const supabase = await getSupabaseAsync();
+                if (supabase) {
+                    try {
+                        // Delete measurements first (cascade should handle this, but being explicit)
+                        await supabase
+                            .from('measurements')
+                            .delete()
+                            .eq('client_id', clientId)
+                            .eq('user_id', user.id);
+                        
+                        // Delete client
+                        const { error } = await supabase
+                            .from('clients')
+                            .delete()
+                            .eq('id', clientId)
+                            .eq('user_id', user.id);
+                        
+                        if (error) {
+                            console.error('[DeleteClient] Error syncing deletion to Supabase:', error);
+                            // Don't show error to user - deletion already succeeded locally
+                        } else {
+                            console.log('[DeleteClient] Client deletion synced to Supabase');
+                        }
+                    } catch (err) {
+                        console.error('[DeleteClient] Error syncing deletion to Supabase:', err);
+                        // Don't show error to user - deletion already succeeded locally
+                    }
+                }
+            })();
+        }
     } catch (err) {
         console.error('Error deleting client:', err);
         showToast(err.message || 'Failed to delete client. Please try again.', 'error', 4000);
         // Re-fetch to restore correct state
         getClients(true).then(() => {
-            renderClientsList();
+            if (typeof renderClientsList === 'function') {
+                renderClientsList();
+            }
         });
         throw err;
     }
@@ -1574,18 +1672,36 @@ async function findOrCreateClient(name, phone, sex) {
         }
     }
     
+    // STRICT GUARD: business_id MUST exist and be valid UUID
     if (!business || !business.id) {
-        throw new Error('Please create a business first before adding clients.');
+        throw new Error('CRITICAL: Business not found. Cannot create client without valid business_id.');
     }
     
-    // Try to find existing client in IndexedDB first
+    // STRICT GUARD: Verify business_id is a valid UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(business.id)) {
+        throw new Error('CRITICAL: Invalid business_id format. Must be valid UUID.');
+    }
+    
+    // STRICT GUARD: If offline, verify business exists locally (parent UUID confirmed)
+    if (!isOnline()) {
+        // Use cached business (which should be set on login)
+        const cachedBusiness = getCachedBusiness();
+        if (!cachedBusiness || cachedBusiness.id !== business.id) {
+            throw new Error('CRITICAL: Cannot create client offline without confirmed parent business UUID.');
+        }
+    }
+    
+    // Try to find existing client in IndexedDB first (within same business scope)
     const allClients = await window.indexedDBHelper.getClientsLocal(user.id);
     const existingClient = allClients.find(c => {
+        // Match by name+phone within same business scope
         const nameMatch = c.name.toLowerCase() === nameTrimmed.toLowerCase();
-    if (phoneNormalized) {
-            return nameMatch && c.phone === phoneNormalized;
+        const businessMatch = c.business_id === business.id;
+        if (phoneNormalized) {
+            return businessMatch && nameMatch && c.phone === phoneNormalized;
     } else {
-            return nameMatch && !c.phone;
+            return businessMatch && nameMatch && !c.phone;
         }
     });
     
@@ -1614,25 +1730,50 @@ async function findOrCreateClient(name, phone, sex) {
         return existingClient;
     }
     
-    // Create new client - save to IndexedDB immediately (LOCAL-FIRST)
+    // Create new client - STRICT: Only if business_id confirmed
+    // STRICT GUARD: Do NOT insert if fetch failed or business_id invalid
+    if (!isOnline() && !business.id) {
+        throw new Error('CRITICAL: Cannot create client offline without valid business_id.');
+    }
+    
     try {
+        // STRICT: Generate UUID ONCE at creation, NEVER regenerate
+        const clientId = generateUUID();
+        
         // Determine if this is an offline save
         const isOffline = !isOnline();
         
-        const clientData = {
-            name: nameTrimmed,
-            phone: phoneNormalized || null,
-            sex: sex || null,
-            synced: !isOffline, // Mark as synced if online, unsynced if offline
-            created_offline: isOffline, // Flag for offline-created clients
-            created_at: new Date().toISOString() // Local timestamp
-        };
-        
+            // Mark as synced if online (will be verified/reconciled later)
+            // Don't block on verification - let reconciliation handle sync verification
+            const synced = isOnline() && !isOffline;
+            
+            const clientData = {
+                server_id: clientId, // UUID generated ONCE
+                name: nameTrimmed,
+                phone: phoneNormalized || null,
+                sex: sex || null,
+                synced: synced,
+                created_offline: isOffline,
+                created_at: new Date().toISOString()
+            };
+            
+        // STRICT GUARD: business_id MUST be valid UUID before insert
         const savedClient = await window.indexedDBHelper.saveClientLocal(clientData, user.id, business.id);
         
-        // Trigger background sync (non-blocking)
-        if (window.syncManager && isOnline()) {
-            window.syncManager.performSync().catch(() => {}); // Silent failure
+        // IMMEDIATE SYNC: Push to Supabase right away (if online) for cross-device sync
+        // This is NOT background sync - it's immediate sync on creation
+        if (window.immediateSync && isOnline()) {
+            try {
+                const syncResult = await window.immediateSync.syncClientImmediately(savedClient, user.id, business.id);
+                if (syncResult.synced) {
+                    console.log('[findOrCreateClient] Client immediately synced to Supabase:', syncResult.id);
+                } else {
+                    console.log('[findOrCreateClient] Client saved locally, will sync later via reconciliation');
+                }
+            } catch (syncErr) {
+                console.warn('[findOrCreateClient] Immediate sync failed (will sync later):', syncErr);
+                // Don't block - client is saved locally, will sync later
+            }
         }
         
         // Update UI immediately
@@ -1839,16 +1980,84 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
         }
     }
     
+    // STRICT GUARD: business_id MUST exist and be valid UUID
     if (!business || !business.id) {
-        throw new Error('Please create a business first before adding measurements.');
+        throw new Error('CRITICAL: Business not found. Cannot create measurement without valid business_id.');
     }
     
-    // Resolve client_id (convert server_id to local_id if needed, or keep local_id)
+    // STRICT GUARD: Verify business_id is a valid UUID format
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(business.id)) {
+        throw new Error('CRITICAL: Invalid business_id format. Must be valid UUID.');
+    }
+    
+    // STRICT GUARD: client_id MUST exist and be valid UUID
+    if (!clientId) {
+        throw new Error('CRITICAL: client_id is required. Cannot create measurement without valid client_id.');
+    }
+    
+    // Resolve client_id and verify it exists within same business scope
     let resolvedClientId = clientId;
     const client = await window.indexedDBHelper.getClientLocal(clientId, user.id);
-    if (client) {
-        resolvedClientId = client.local_id; // Use local_id for IndexedDB
+    
+    if (!client) {
+        throw new Error(`CRITICAL: Client with id ${clientId} not found. Cannot create measurement with invalid client_id.`);
     }
+    
+    // STRICT GUARD: Verify client belongs to same business
+    // Check both possible field names for business_id
+    const clientBusinessId = client.business_id || client.businessId;
+    const currentBusinessId = business.id || business.business_id;
+    
+    // If client has no business_id or it doesn't match, fix it
+    if (!clientBusinessId || clientBusinessId !== currentBusinessId) {
+        // Debug: Log the mismatch for troubleshooting
+        console.warn('[saveMeasurement] Client business_id missing or mismatch:', {
+            clientBusinessId: clientBusinessId || 'MISSING',
+            currentBusinessId,
+            client: {
+                id: client.id,
+                server_id: client.server_id,
+                local_id: client.local_id,
+                business_id: client.business_id,
+                businessId: client.businessId,
+                user_id: client.user_id
+            },
+            business: {
+                id: business.id,
+                business_id: business.business_id,
+                user_id: business.user_id,
+                name: business.name
+            },
+            user_id: user.id
+        });
+        
+        // Always fix if business_id is missing or different (client belongs to this user)
+        console.log('[saveMeasurement] Fixing client business_id and user_id to match current business');
+        try {
+            // Update client's business_id and user_id to match current business/user
+            const updates = {
+                business_id: currentBusinessId,
+                user_id: user.id // Also ensure user_id is set
+            };
+            await window.indexedDBHelper.updateClientLocal(client.local_id, updates, user.id);
+            // Update local client object for current operation
+            client.business_id = currentBusinessId;
+            client.user_id = user.id;
+            console.log('[saveMeasurement] Client business_id and user_id updated successfully');
+        } catch (updateErr) {
+            console.error('[saveMeasurement] Failed to update client business_id/user_id:', updateErr);
+            throw new Error(`CRITICAL: Client business_id/user_id missing and cannot be fixed. Please recreate the client. Error: ${updateErr.message}`);
+        }
+    }
+    
+    // STRICT GUARD: Verify client_id is a valid UUID
+    const clientServerId = client.server_id || client.id;
+    if (!uuidRegex.test(clientServerId)) {
+        throw new Error('CRITICAL: Invalid client_id format. Must be valid UUID.');
+    }
+    
+    resolvedClientId = clientServerId; // Use server_id for Supabase, ensure it's valid UUID
     
     if (measurementId) {
         // Update existing measurement - LOCAL-FIRST
@@ -1878,10 +2087,71 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
             
             const updated = await window.indexedDBHelper.updateMeasurementLocal(localId, updates, user.id);
             
-            // Trigger background sync (non-blocking)
-            if (window.syncManager && isOnline()) {
-                window.syncManager.performSync().catch(() => {}); // Silent failure
+            // Normalize the returned measurement
+            const normalizedMeasurement = {
+                id: updated.id || existingMeasurement.server_id || existingMeasurement.local_id,
+                server_id: existingMeasurement.server_id || null,
+                local_id: updated.local_id || existingMeasurement.local_id,
+                client_id: updated.client_id || existingMeasurement.client_id,
+                business_id: existingMeasurement.business_id,
+                user_id: existingMeasurement.user_id,
+                garment_type: updated.garment_type || null,
+                date_created: updated.date_created || existingMeasurement.created_at,
+                shoulder: updated.shoulder || null,
+                chest: updated.chest || null,
+                waist: updated.waist || null,
+                sleeve: updated.sleeve || null,
+                length: updated.length || null,
+                neck: updated.neck || null,
+                hip: updated.hip || null,
+                inseam: updated.inseam || null,
+                thigh: updated.thigh || null,
+                seat: updated.seat || null,
+                notes: updated.notes || null,
+                customFields: updated.customFields || {},
+                synced: updated.synced !== undefined ? updated.synced : false
+            };
+            
+            // Update cache immediately
+            // Ensure cache is initialized
+            if (!measurementsCache) {
+                measurementsCache = [];
             }
+            // Update or add to cache
+            const cacheIndex = measurementsCache.findIndex(m => m.id === normalizedMeasurement.id);
+            if (cacheIndex !== -1) {
+                measurementsCache[cacheIndex] = normalizedMeasurement;
+            } else {
+                measurementsCache.push(normalizedMeasurement);
+            }
+            cacheTimestamp = Date.now();
+            setCacheTimestamp(cacheTimestamp);
+            setCachedMeasurements(measurementsCache);
+            
+            // IMMEDIATE SYNC: Push to Supabase right away (if online) for cross-device sync
+            // This is NOT background sync - it's immediate sync on update
+            if (window.immediateSync && isOnline() && business) {
+                try {
+                    const syncResult = await window.immediateSync.syncMeasurementImmediately(normalizedMeasurement, user.id, business.id, normalizedMeasurement.client_id);
+                    if (syncResult.synced) {
+                        console.log('[saveMeasurement] Measurement update immediately synced to Supabase:', syncResult.id);
+                        // Mark as synced in IndexedDB
+                        if (normalizedMeasurement.local_id && window.indexedDBHelper) {
+                            await window.indexedDBHelper.updateMeasurementLocal(normalizedMeasurement.local_id, { synced: true }, user.id);
+                            normalizedMeasurement.synced = true;
+                            updateMeasurementInCache(normalizedMeasurement.id, { synced: true });
+                        }
+                    } else {
+                        console.log('[saveMeasurement] Measurement update saved locally, will sync later via reconciliation');
+                    }
+                } catch (syncErr) {
+                    console.warn('[saveMeasurement] Immediate sync failed (will sync later):', syncErr);
+                    // Don't block - measurement is updated locally, will sync later
+                }
+            }
+            
+            // Show success message
+            showToast('Measurement updated successfully!', 'success', 2000);
             
             // Update UI immediately
             const currentScreen = document.querySelector('.screen.active');
@@ -1889,19 +2159,32 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
                 renderRecentMeasurements();
             }
             
-            return updated;
+            return normalizedMeasurement;
         } catch (err) {
             console.error('Error updating measurement locally:', err);
             showToast('Failed to update measurement. Please try again.', 'error', 4000);
             throw err;
         }
     } else {
-        // Create new measurement - LOCAL-FIRST
+        // Create new measurement - STRICT: Only if parent UUIDs confirmed
+        // STRICT GUARD: Do NOT insert if fetch failed or parent UUIDs invalid
+        if (!isOnline() && (!business.id || !resolvedClientId)) {
+            throw new Error('CRITICAL: Cannot create measurement offline without confirmed parent UUIDs.');
+        }
+        
         try {
+            // STRICT: Generate UUID ONCE at creation, NEVER regenerate
+            const measurementId = generateUUID();
+            
             // Determine if this is an offline save
             const isOffline = !isOnline();
             
+            // Mark as synced if online (will be verified/reconciled later)
+            // Don't block on verification - let reconciliation handle sync verification
+            const synced = isOnline() && !isOffline;
+            
             const measurementData = {
+                server_id: measurementId, // UUID generated ONCE
                 client_id: resolvedClientId,
                 garment_type: formData.garmentType || null,
                 shoulder: formData.shoulder ? parseFloat(formData.shoulder) : null,
@@ -1916,16 +2199,27 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
                 seat: formData.seat ? parseFloat(formData.seat) : null,
                 notes: formData.notes || null,
                 custom_fields: formData.customFields || {},
-                synced: !isOffline, // Mark as synced if online, unsynced if offline
-                created_offline: isOffline, // Flag for offline-created measurements
-                created_at: new Date().toISOString() // Local timestamp
+                synced: synced,
+                created_offline: isOffline,
+                created_at: new Date().toISOString()
             };
             
             const savedMeasurement = await window.indexedDBHelper.saveMeasurementLocal(measurementData, user.id, business.id);
             
-            // Trigger background sync (non-blocking)
-            if (window.syncManager && isOnline()) {
-                window.syncManager.performSync().catch(() => {}); // Silent failure
+            // IMMEDIATE SYNC: Push to Supabase right away (if online) for cross-device sync
+            // This is NOT background sync - it's immediate sync on creation
+            if (window.immediateSync && isOnline()) {
+                try {
+                    const syncResult = await window.immediateSync.syncMeasurementImmediately(savedMeasurement, user.id, business.id, resolvedClientId);
+                    if (syncResult.synced) {
+                        console.log('[saveMeasurement] Measurement immediately synced to Supabase:', syncResult.id);
+                    } else {
+                        console.log('[saveMeasurement] Measurement saved locally, will sync later via reconciliation');
+                    }
+                } catch (syncErr) {
+                    console.warn('[saveMeasurement] Immediate sync failed (will sync later):', syncErr);
+                    // Don't block - measurement is saved locally, will sync later
+                }
             }
             
             // Update UI immediately
@@ -1937,21 +2231,18 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
             return savedMeasurement;
         } catch (err) {
             console.error('Error creating measurement locally:', err);
-            // Never show errors for offline saves - they should always succeed locally
+            // STRICT: HARD FAIL if parent UUIDs invalid
+            if (err.message && (err.message.includes('CRITICAL') || err.message.includes('Business') || err.message.includes('Client'))) {
+                throw err; // Re-throw critical errors
+            }
             // Only throw error if it's a real database error (not offline-related)
             if (isOnline() && err.message && !err.message.includes('offline')) {
                 showToast('Failed to create measurement. Please try again.', 'error', 4000);
                 throw err;
             } else {
-                // Offline save - log but don't throw (measurement saved locally)
-                console.warn('[saveMeasurement] Offline save completed locally:', err);
-                // Return a mock measurement object so the UI can continue
-                return {
-                    id: 'local-' + Date.now(),
-                    client_id: resolvedClientId,
-                    synced: false,
-                    created_offline: true
-                };
+                // Offline save failed - HARD FAIL if parent UUIDs not confirmed
+                console.error('[saveMeasurement] Offline save failed:', err);
+                throw new Error('CRITICAL: Cannot create measurement offline without confirmed parent UUIDs.');
             }
         }
     }
@@ -2049,39 +2340,88 @@ async function deleteMeasurement(measurementId, clientId) {
         return;
     }
     
-    // Remove from cache immediately (optimistic)
-    removeMeasurementFromCache(measurementId);
-    
-    // Update UI immediately
-    showClientDetails(clientId, previousScreen).catch(err => {
-        console.warn('Error showing client details:', err);
-    });
-    
-    // Delete from Supabase in background (non-blocking)
-    (async () => {
-    const supabase = getSupabase();
-    if (!supabase) {
-        console.error('Supabase client not available');
-            showToast('Unable to connect to database', 'error');
+    const user = await getCurrentUser();
+    if (!user) {
+        showToast('You must be logged in to delete a measurement.', 'error', 4000);
         return;
     }
     
-    const { error } = await supabase
-        .from('measurements')
-        .delete()
-        .eq('id', measurementId);
+    // Initialize IndexedDB if needed
+    if (!window.indexedDBHelper) {
+        await window.indexedDBHelper.initDB();
+    }
     
-    if (error) {
-        console.error('Error deleting measurement:', error);
-            showToast('Failed to delete measurement. Please try again.', 'error');
-            // Re-fetch to restore correct state
-            getMeasurements(true).then(() => {
-                showClientDetails(clientId, previousScreen);
+    try {
+        // LOCAL-FIRST: Delete from IndexedDB first
+        // Find measurement by local_id or server_id to get local_id
+        const measurement = await window.indexedDBHelper.getMeasurementLocal(measurementId, user.id);
+        if (!measurement) {
+            throw new Error('Measurement not found');
+        }
+        
+        const localId = measurement.local_id;
+        
+        // Delete from IndexedDB
+        await window.indexedDBHelper.deleteMeasurementLocal(localId, user.id);
+        
+        // Remove from cache immediately
+        removeMeasurementFromCache(measurementId);
+        
+        // Update UI immediately
+        showToast('Measurement deleted', 'success', 2000);
+        
+        // Update client details view
+        if (clientId) {
+            showClientDetails(clientId, previousScreen).catch(err => {
+                console.warn('Error showing client details:', err);
             });
         } else {
-            showToast('Measurement deleted', 'success', 2000);
+            // If no clientId, refresh recent measurements
+            const currentScreen = document.querySelector('.screen.active');
+            if (currentScreen?.id === 'home-screen') {
+                renderRecentMeasurements();
+            }
         }
-    })();
+        
+        // Sync deletion to Supabase if online (non-blocking)
+        if (isOnline()) {
+            (async () => {
+                const supabase = await getSupabaseAsync();
+                if (supabase) {
+                    try {
+                        const { error } = await supabase
+                            .from('measurements')
+                            .delete()
+                            .eq('id', measurementId);
+                        
+                        if (error) {
+                            console.error('[DeleteMeasurement] Error syncing deletion to Supabase:', error);
+                            // Don't show error to user - deletion already succeeded locally
+                        } else {
+                            console.log('[DeleteMeasurement] Measurement deletion synced to Supabase');
+                        }
+                    } catch (err) {
+                        console.error('[DeleteMeasurement] Error syncing deletion to Supabase:', err);
+                        // Don't show error to user - deletion already succeeded locally
+                    }
+                }
+            })();
+        }
+    } catch (err) {
+        console.error('Error deleting measurement:', err);
+        showToast(err.message || 'Failed to delete measurement. Please try again.', 'error', 4000);
+        // Re-fetch to restore correct state
+        getMeasurements(true).then(() => {
+            if (clientId) {
+                showClientDetails(clientId, previousScreen);
+            } else {
+                const currentScreen = document.querySelector('.screen.active');
+                if (currentScreen?.id === 'home-screen') {
+                    renderRecentMeasurements();
+                }
+            }
+        });
+    }
 }
 
 // Update business header name (async - fetches from Supabase)
@@ -2346,7 +2686,7 @@ document.getElementById('measurement-form').addEventListener('submit', async (e)
     let client;
     try {
         client = await findOrCreateClient(formData.clientName, formData.phone, formData.sex);
-        if (!client) {
+    if (!client) {
             throw new Error('Failed to create/find client');
         }
     } catch (err) {
@@ -2357,7 +2697,7 @@ document.getElementById('measurement-form').addEventListener('submit', async (e)
         }
         // Only show error if we're online - offline saves should work silently
         if (isOnline()) {
-            showToast('Error creating/finding client', 'error');
+        showToast('Error creating/finding client', 'error');
         } else {
             showToast('Please check your connection and try again', 'error');
         }
@@ -2954,22 +3294,62 @@ async function getRecentMeasurements(limit = null, offset = 0) {
     const paginated = limit ? sorted.slice(offset, offset + limit) : sorted.slice(offset);
     
     // Map to include client info - resolve client IDs properly
-    const measurementsWithClients = await Promise.all(
-        paginated.map(async (measurement) => {
-            // Resolve client (handles local_id/server_id mapping)
-            const client = await resolveClientForMeasurement(measurement.client_id, user.id);
-            
-            // If client not found, show placeholder (will re-render when clients load)
-            const clientName = client ? client.name : null; // null = not ready yet, not "Unknown"
-            
-            return {
-                ...measurement,
-                clientName: clientName,
-                clientId: measurement.client_id,
-                clientResolved: !!client
-            };
-        })
-    );
+    // Use synchronous lookup first (from already-loaded clients array) for speed
+    const clientMap = new Map();
+    clients.forEach(c => {
+        // Map by id, server_id, and local_id for fast lookup
+        if (c.id) clientMap.set(c.id, c);
+        if (c.server_id) clientMap.set(c.server_id, c);
+        if (c.local_id) clientMap.set(c.local_id, c);
+    });
+    
+    // First pass: synchronous lookup (fast) - no async blocking
+    const measurementsWithClients = paginated.map((measurement) => {
+        // Try synchronous lookup first (instant)
+        let client = clientMap.get(measurement.client_id);
+        
+        // If not found synchronously, we'll resolve async later (non-blocking)
+        const clientName = client ? client.name : null;
+        
+        return {
+            ...measurement,
+            clientName: clientName,
+            clientId: measurement.client_id,
+            clientResolved: !!client,
+            _needsAsyncResolve: !client
+        };
+    });
+    
+    // Second pass: async resolve only for measurements that need it (non-blocking)
+    // This allows the UI to render immediately with cached data
+    Promise.all(
+        measurementsWithClients
+            .filter(m => m._needsAsyncResolve)
+            .map(async (measurement) => {
+                const client = await resolveClientForMeasurement(measurement.client_id, user.id);
+                if (client) {
+                    measurement.clientName = client.name;
+                    measurement.clientResolved = true;
+                    // Update the UI if this measurement is visible
+                    const container = document.getElementById('recent-measurements');
+                    if (container) {
+                        const row = container.querySelector(`[data-measurement-id="${measurement.id}"]`);
+                        if (row) {
+                            const clientNameEl = row.querySelector('.recent-measurement-client');
+                            if (clientNameEl) {
+                                clientNameEl.textContent = client.name;
+                            }
+                        }
+                    }
+                }
+                delete measurement._needsAsyncResolve;
+            })
+    ).catch(err => {
+        console.warn('[GetRecentMeasurements] Error resolving clients:', err);
+    });
+    
+    // Clean up temporary property
+    measurementsWithClients.forEach(m => delete m._needsAsyncResolve);
     
     return {
         measurements: measurementsWithClients,
@@ -3091,9 +3471,24 @@ async function renderRecentMeasurements(resetPagination = true) {
     const seeMoreBtn = document.getElementById('see-more-measurements-btn');
     if (seeMoreBtn) {
         seeMoreBtn.addEventListener('click', () => {
+            // Update state immediately for instant feedback
             recentMeasurementsExpanded = true;
             recentMeasurementsLimit = 15;
-            renderRecentMeasurements();
+            
+            // Update button text immediately (optimistic UI)
+            const controlContainer = document.getElementById('recent-measurements-control');
+            if (controlContainer) {
+                controlContainer.innerHTML = `
+                    <button id="collapse-measurements-btn" class="recent-view-all-btn">
+                        Collapse
+                    </button>
+                `;
+            }
+            
+            // Render in next frame (non-blocking)
+            requestAnimationFrame(() => {
+                renderRecentMeasurements();
+            });
         });
     }
     
@@ -3101,10 +3496,27 @@ async function renderRecentMeasurements(resetPagination = true) {
     const collapseBtn = document.getElementById('collapse-measurements-btn');
     if (collapseBtn) {
         collapseBtn.addEventListener('click', () => {
+            // Update state immediately for instant feedback
             recentMeasurementsExpanded = false;
             recentMeasurementsLimit = 4;
             recentMeasurementsOffset = 0;
-            renderRecentMeasurements(true);
+            
+            // Update button text immediately (optimistic UI)
+            const controlContainer = document.getElementById('recent-measurements-control');
+            if (controlContainer) {
+                // Check if there are more measurements to show "View all" button
+                // We'll update this after render, but show something immediately
+                controlContainer.innerHTML = `
+                    <button id="see-more-measurements-btn" class="recent-view-all-btn">
+                        View all →
+                    </button>
+                `;
+            }
+            
+            // Render in next frame (non-blocking)
+            requestAnimationFrame(() => {
+                renderRecentMeasurements(true);
+            });
         });
     }
     
@@ -3641,10 +4053,77 @@ document.getElementById('edit-client-form').addEventListener('submit', async (e)
         return;
     }
     
-    await updateClient(currentClientId, name, phone, sex);
+    const updatedClient = await updateClient(currentClientId, name, phone, sex);
     
-    // Return to Client Detail View
-    await showClientDetails(currentClientId, previousScreen);
+    if (updatedClient) {
+        // Show success message
+        showToast('Client information updated successfully!', 'success', 2000);
+        
+        // Update the display directly using the returned client object (don't fetch again)
+        // This ensures the display shows the updated values immediately
+        document.getElementById('client-details-name').textContent = updatedClient.name;
+        
+        const detailsContainer = document.getElementById('client-details-content');
+        if (detailsContainer) {
+            // Get measurements for this client
+            const measurements = await getMeasurements();
+            const clientMeasurements = measurements
+                .filter(m => m.client_id === currentClientId)
+                .sort((a, b) => new Date(b.date_created) - new Date(a.date_created));
+            
+            // Always show client info (name, phone, sex)
+            let html = `
+                <div class="client-info">
+                    <div class="client-info-item">
+                        <span class="client-info-label">Name:</span>
+                        <span>${escapeHtml(updatedClient.name)}</span>
+                    </div>
+                    ${updatedClient.phone ? `
+                        <div class="client-info-item">
+                            <span class="client-info-label">Phone:</span>
+                            <span>${escapeHtml(updatedClient.phone)}</span>
+                        </div>
+                    ` : ''}
+                    ${updatedClient.sex ? `
+                        <div class="client-info-item">
+                            <span class="client-info-label">Sex:</span>
+                            <span>${escapeHtml(updatedClient.sex)}</span>
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+            
+            if (clientMeasurements.length === 0) {
+                html += `
+                    <div class="empty-state" style="margin-top: 30px;">
+                        <p>No measurements yet for this client.</p>
+                    </div>
+                `;
+            } else {
+                html += `
+                    <div class="measurements-list" style="margin-top: 20px;">
+                        <h3 style="margin-bottom: 15px;">Measurements (${clientMeasurements.length})</h3>
+                        ${clientMeasurements.map(m => `
+                            <div class="measurement-item" style="padding: 15px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 10px; cursor: pointer;" onclick="viewMeasurement('${m.id}')">
+                                <div style="display: flex; justify-content: space-between; align-items: center;">
+                                    <div>
+                                        <strong>${escapeHtml(new Date(m.date_created).toLocaleDateString())}</strong>
+                                    </div>
+                                    <button class="btn btn-sm" onclick="event.stopPropagation(); deleteMeasurement('${m.id}');">Delete</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+            }
+            
+            detailsContainer.innerHTML = html;
+        }
+        
+        // Stay on client details screen (already updated above)
+    } else {
+        showToast('Failed to update client information. Please try again.', 'error', 4000);
+    }
 });
 
 // Back button from Edit Client screen
@@ -3794,6 +4273,9 @@ function setupBusinessFormListener() {
                 
                 console.log('Business created successfully');
                 
+                // Show success message
+                showToast('Business created successfully!', 'success', 3000);
+                
                 // Cache the business for offline use
                 setCachedBusiness(business);
     
@@ -3930,29 +4412,40 @@ document.getElementById('edit-business-form').addEventListener('submit', async (
     
     // Email is optional - no validation needed
     
-    await updateBusiness(name, email, phone);
+    const updatedBusiness = await updateBusiness(name, email, phone);
     
-    // Update header
-    await updateBusinessHeader();
-    
-    // Update the display in settings
-    const infoContainer = document.getElementById('business-info-display');
-    infoContainer.innerHTML = `
-        <div class="business-info-item">
-            <span class="business-info-label">Name:</span>
-            <span>${escapeHtml(name)}</span>
-        </div>
-        <div class="business-info-item">
-            <span class="business-info-label">Email:</span>
-            <span>${escapeHtml(email)}</span>
-        </div>
-        <div class="business-info-item">
-            <span class="business-info-label">Phone:</span>
-            <span>${escapeHtml(phone)}</span>
-        </div>
-    `;
-    
-    showScreen('settings-screen');
+    if (updatedBusiness) {
+        // Show success message
+        showToast('Business information updated successfully!', 'success', 3000);
+        
+        // Update header using the updated business object (don't fetch again)
+        updateBusinessHeaderSync(updatedBusiness);
+        updateNavbarBusinessNameSync(updatedBusiness);
+        
+        // Update the display in settings using the updated business object
+        const infoContainer = document.getElementById('business-info-display');
+        if (infoContainer) {
+            infoContainer.innerHTML = `
+                <div class="business-info-item">
+                    <span class="business-info-label">Name:</span>
+                    <span>${escapeHtml(updatedBusiness.name)}</span>
+                </div>
+                <div class="business-info-item">
+                    <span class="business-info-label">Email:</span>
+                    <span>${escapeHtml(updatedBusiness.email || 'Not set')}</span>
+                </div>
+                <div class="business-info-item">
+                    <span class="business-info-label">Phone:</span>
+                    <span>${escapeHtml(updatedBusiness.phone)}</span>
+                </div>
+            `;
+        }
+        
+        // Stay on settings screen (don't refresh it)
+        // The display is already updated above
+    } else {
+        showToast('Failed to update business information. Please try again.', 'error', 4000);
+    }
 });
 
 // Email Linking Event Listeners - Use event delegation for dynamic buttons
@@ -4468,15 +4961,15 @@ function setupAuthStateListener() {
             if (isExplicitLogout) {
                 // User explicitly logged out - hide all authenticated screens, show login
                 console.log('[Auth] Explicit logout detected');
-                const allScreens = document.querySelectorAll('.screen');
-                allScreens.forEach(screen => {
-                    screen.classList.remove('active');
-                    screen.style.display = 'none';
-                });
-                showScreen('login-screen');
-                // Stop background sync
-                if (window.syncManager) {
-                    window.syncManager.stopBackgroundSync();
+            const allScreens = document.querySelectorAll('.screen');
+            allScreens.forEach(screen => {
+                screen.classList.remove('active');
+                screen.style.display = 'none';
+            });
+            showScreen('login-screen');
+            // Stop background sync
+            if (window.syncManager) {
+                window.syncManager.stopBackgroundSync();
                 }
             } else {
                 // SIGNED_OUT but not explicit logout - likely network failure
@@ -4555,7 +5048,7 @@ async function restoreUserSession(userId) {
                     if (currentScreen && currentScreen.id === 'home-screen') {
                         updateBusinessHeaderSync(business);
                         updateNavbarBusinessNameSync(business);
-                    } else {
+                } else {
                         // Show dashboard if we just got business
                         showScreen('home-screen');
                         updateBusinessHeaderSync(business);
@@ -4567,7 +5060,7 @@ async function restoreUserSession(userId) {
                 console.warn('[Auth] Could not fetch business from Supabase:', fetchErr);
                 // Do NOT set business to null - preserve cached data
                 // UI already shown, continue with cached data
-            }
+                }
         } else if (!isOnline() && business) {
             // Offline with cached business - use it
             console.log('[Auth] Offline - using cached business data');
@@ -4577,22 +5070,22 @@ async function restoreUserSession(userId) {
         if (!business) {
             const currentScreen = document.querySelector('.screen.active');
             if (!currentScreen || currentScreen.id !== 'business-setup-screen') {
-                console.log('[Auth] No business found, showing business setup');
-                showScreen('business-setup-screen');
+            console.log('[Auth] No business found, showing business setup');
+            showScreen('business-setup-screen');
             }
         } else {
             // Business exists - ensure dashboard is showing
             const currentScreen = document.querySelector('.screen.active');
             if (!currentScreen || currentScreen.id !== 'home-screen') {
-                console.log('[Auth] Business found, showing dashboard');
-                // Hide business setup screen if it was showing
-                const businessSetupScreen = document.getElementById('business-setup-screen');
-                if (businessSetupScreen) {
-                    businessSetupScreen.classList.remove('active');
-                    businessSetupScreen.style.display = 'none';
-                }
-                // Show dashboard
-                showScreen('home-screen');
+            console.log('[Auth] Business found, showing dashboard');
+            // Hide business setup screen if it was showing
+            const businessSetupScreen = document.getElementById('business-setup-screen');
+            if (businessSetupScreen) {
+                businessSetupScreen.classList.remove('active');
+                businessSetupScreen.style.display = 'none';
+            }
+            // Show dashboard
+            showScreen('home-screen');
             }
             
             // Update UI with business info (non-blocking)
@@ -4609,23 +5102,23 @@ async function restoreUserSession(userId) {
     } catch (err) {
         console.error('[Auth] Error restoring session:', err);
         // On error, try to use cached data first (offline-first)
-        const cachedBusiness = getCachedBusiness();
-        if (cachedBusiness) {
-            // Hide auth screens
-            const loginScreen = document.getElementById('login-screen');
-            const signupScreen = document.getElementById('signup-screen');
-            if (loginScreen) {
-                loginScreen.classList.remove('active');
-                loginScreen.style.display = 'none';
-            }
-            if (signupScreen) {
-                signupScreen.classList.remove('active');
-                signupScreen.style.display = 'none';
-            }
-            // Show dashboard with cached business
-            showScreen('home-screen');
-            updateBusinessHeaderSync(cachedBusiness);
-            updateNavbarBusinessNameSync(cachedBusiness);
+                const cachedBusiness = getCachedBusiness();
+                if (cachedBusiness) {
+                    // Hide auth screens
+                    const loginScreen = document.getElementById('login-screen');
+                    const signupScreen = document.getElementById('signup-screen');
+                    if (loginScreen) {
+                        loginScreen.classList.remove('active');
+                        loginScreen.style.display = 'none';
+                    }
+                    if (signupScreen) {
+                        signupScreen.classList.remove('active');
+                        signupScreen.style.display = 'none';
+                    }
+                    // Show dashboard with cached business
+                    showScreen('home-screen');
+                    updateBusinessHeaderSync(cachedBusiness);
+                    updateNavbarBusinessNameSync(cachedBusiness);
             // Load cached data
             loadUserData(userId).catch(loadErr => {
                 console.warn('[Auth] Error loading cached user data:', loadErr);
@@ -4639,18 +5132,18 @@ async function restoreUserSession(userId) {
                     if (!session || !session.user) {
                         // Not authenticated - show login
                         showScreen('login-screen');
-                    } else {
-                        // Has session but error fetching business - show business setup
-                        showScreen('business-setup-screen');
-                    }
                 } else {
+                        // Has session but error fetching business - show business setup
+                    showScreen('business-setup-screen');
+            }
+        } else {
                     // No Supabase - show business setup
                     showScreen('business-setup-screen');
                 }
             } catch (sessionErr) {
                 console.warn('[Auth] Error checking session:', sessionErr);
                 // Show login as fallback
-                showScreen('login-screen');
+            showScreen('login-screen');
             }
         } else {
             // Offline and no cached business - show business setup
@@ -4822,14 +5315,14 @@ function initializeApp() {
         // ONLY if online - skip verification when offline
         // CRITICAL: Never show login screen if we have cached session - UI already shown
         if (isOnline()) {
-            (async function() {
-                try {
-                    const supabase = await getSupabaseAsync();
-                    if (supabase) {
-                        setupAuthStateListener();
-                        // Verify session (non-blocking)
+        (async function() {
+            try {
+                const supabase = await getSupabaseAsync();
+                if (supabase) {
+                    setupAuthStateListener();
+                    // Verify session (non-blocking)
                         try {
-                            const { data: { session } } = await supabase.auth.getSession();
+                    const { data: { session } } = await supabase.auth.getSession();
                             if (session && session.user) {
                                 // Valid session - cache it
                                 cacheSession(session);
@@ -4838,13 +5331,13 @@ function initializeApp() {
                         } catch (sessionErr) {
                             console.warn('[Init] Session check failed (non-fatal):', sessionErr);
                             // Continue with cached session - UI already shown
-                        }
                     }
-                } catch (err) {
-                    console.warn('[Init] Error verifying session:', err);
-                    // Continue with cached session if offline - UI already shown
                 }
-            })();
+            } catch (err) {
+                console.warn('[Init] Error verifying session:', err);
+                    // Continue with cached session if offline - UI already shown
+            }
+        })();
         } else {
             console.log('[Init] Offline - skipping session verification, using cached session');
             // Still setup auth listener for when we come back online
@@ -4864,47 +5357,47 @@ function initializeApp() {
     // Verify with Supabase in background (non-blocking, doesn't block UI)
     // ONLY if online - skip when offline
     if (isOnline()) {
-        (async function() {
-            try {
-                console.log('[Init] Verifying auth in background...');
-                const supabase = await getSupabaseAsync();
-                
-                if (!supabase) {
-                    console.warn('[Init] Supabase not available - continuing offline');
-                    return;
-                }
-                
-                // Setup auth state change listener
-                setupAuthStateListener();
-                
-                // Check session (non-blocking)
-                const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-                
-                if (sessionError) {
-                    console.warn('[Init] Session check error:', sessionError);
-                    return;
-                }
-                
-                if (session && session.user) {
+    (async function() {
+        try {
+            console.log('[Init] Verifying auth in background...');
+            const supabase = await getSupabaseAsync();
+            
+            if (!supabase) {
+                console.warn('[Init] Supabase not available - continuing offline');
+                return;
+            }
+            
+            // Setup auth state change listener
+            setupAuthStateListener();
+            
+            // Check session (non-blocking)
+            const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+            
+            if (sessionError) {
+                console.warn('[Init] Session check error:', sessionError);
+                return;
+            }
+            
+            if (session && session.user) {
                     console.log('[Init] Valid session found, caching and restoring...');
                     // Cache session explicitly
                     cacheSession(session);
                     // Clear logout flag
                     localStorage.removeItem(LOGOUT_STATE_KEY);
-                    // User is authenticated - restore their session (non-blocking)
-                    restoreUserSession(session.user.id).catch(err => {
-                        console.warn('[Init] Error restoring session:', err);
-                    });
-                }
-            } catch (err) {
-                console.warn('[Init] Error during background auth check:', err);
-                // Continue offline - UI already shown
-            } finally {
-                // Setup all form listeners
-                console.log('[Init] Setting up form listeners...');
-                setupBusinessFormListener();
+                // User is authenticated - restore their session (non-blocking)
+                restoreUserSession(session.user.id).catch(err => {
+                    console.warn('[Init] Error restoring session:', err);
+                });
             }
-        })();
+        } catch (err) {
+            console.warn('[Init] Error during background auth check:', err);
+            // Continue offline - UI already shown
+        } finally {
+            // Setup all form listeners
+            console.log('[Init] Setting up form listeners...');
+            setupBusinessFormListener();
+        }
+    })();
     } else {
         console.log('[Init] Offline - skipping auth verification, using cached session');
         // Still setup auth listener for when we come back online
@@ -5014,6 +5507,8 @@ function setupAuthForms() {
                         successDiv.textContent = 'Account created successfully! Redirecting...';
                         successDiv.style.display = 'block';
                     }
+                    // Show toast for consistency
+                    showToast('Account created successfully!', 'success', 3000);
                     // Reload to check auth state
                     setTimeout(() => {
                         window.location.reload();
@@ -5113,6 +5608,7 @@ function setupAuthForms() {
                     localStorage.removeItem(LOGOUT_STATE_KEY);
                 }
                 if (data.user) {
+                    showToast('Login successful!', 'success', 2000);
                     await restoreUserSession(data.user.id);
                 } else {
                     // Fallback to reload if user data not available
@@ -5208,6 +5704,9 @@ function setupAuthForms() {
                     successDiv.textContent = 'Password updated successfully!';
                     successDiv.style.display = 'block';
                 }
+                
+                // Show toast notification for consistency
+                showToast('Password updated successfully!', 'success', 3000);
                 
                 // Clear form
                 changePasswordForm.reset();
@@ -5426,23 +5925,63 @@ async function getBusinessForUser(userId) {
     }
     
     const supabase = await getSupabaseAsync();
-    if (!supabase) return null;
+    if (!supabase) {
+        console.warn('[getBusinessForUser] Supabase client not available');
+        return null;
+    }
     
     try {
-        const { data, error } = await supabase
+        console.log('[getBusinessForUser] Looking for business with user_id:', userId);
+        
+        // First try by user_id
+        let { data, error } = await supabase
             .from('businesses')
             .select('*')
             .eq('user_id', userId)
             .limit(1)
-            .single();
+            .maybeSingle(); // Use maybeSingle() instead of single() to avoid error if not found
         
-        if (error) {
-            console.warn('[getBusinessForUser] Supabase query error:', error);
+        if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
+            console.error('[getBusinessForUser] Error querying by user_id:', error);
+        }
+        
+        // If not found by user_id, try to find by user's email as fallback
+        if (!data || !data.id) {
+            console.log('[getBusinessForUser] No business found by user_id, trying email fallback...');
+            const user = await getCurrentUser();
+            if (user && user.email) {
+                const { data: emailBusiness, error: emailError } = await supabase
+                    .from('businesses')
+                    .select('*')
+                    .eq('email', user.email.toLowerCase())
+                    .limit(1)
+                    .maybeSingle();
+                
+                if (!emailError && emailBusiness && emailBusiness.id) {
+                    console.log('[getBusinessForUser] Found business by email, updating with user_id...');
+                    // Update business with user_id for future lookups
+                    const { error: updateError } = await supabase
+                        .from('businesses')
+                        .update({ user_id: userId })
+                        .eq('id', emailBusiness.id);
+                    
+                    if (!updateError) {
+                        data = emailBusiness;
+                        console.log('[getBusinessForUser] Business updated with user_id');
+                    } else {
+                        console.warn('[getBusinessForUser] Error updating business user_id:', updateError);
+                    }
+                }
+            }
+        }
+        
+        if (!data || !data.id) {
+            console.warn('[getBusinessForUser] No business found for user:', userId);
             return null;
         }
         
-        if (!data) return null;
-        
+        console.log('[getBusinessForUser] Found business:', data.name, data.id);
+    
         return {
             id: data.id,
             name: data.name,
@@ -5451,28 +5990,40 @@ async function getBusinessForUser(userId) {
             createdAt: data.created_at
         };
     } catch (err) {
-        console.warn('[getBusinessForUser] Network error:', err);
+        console.error('[getBusinessForUser] Network error:', err);
         return null;
     }
 }
 
+// Track if loadUserData is currently running to prevent concurrent calls
+let loadUserDataInProgress = false;
+let loadUserDataPromise = null;
+
 // Load user data (clients and measurements) - LOCAL-FIRST with strict load order
 async function loadUserData(userId) {
-    try {
-        console.log('[LoadData] Starting data load for user:', userId);
-        
-        // Step 1: Initialize IndexedDB FIRST (required for all operations)
-        if (window.indexedDBHelper) {
-            try {
-                await window.indexedDBHelper.initDB();
-                console.log('[LoadData] IndexedDB initialized');
-            } catch (dbErr) {
-                console.error('[LoadData] IndexedDB initialization failed:', dbErr);
-                throw new Error('Failed to initialize local database');
+    // Prevent concurrent calls - if already loading, return the existing promise
+    if (loadUserDataInProgress && loadUserDataPromise) {
+        console.log('[LoadData] Already loading, waiting for existing load to complete...');
+        return loadUserDataPromise;
+    }
+    
+    loadUserDataInProgress = true;
+    loadUserDataPromise = (async () => {
+        try {
+            console.log('[LoadData] Starting data load for user:', userId);
+            
+            // Step 1: Initialize IndexedDB FIRST (required for all operations)
+            if (window.indexedDBHelper) {
+                try {
+                    await window.indexedDBHelper.initDB();
+                    console.log('[LoadData] IndexedDB initialized');
+                } catch (dbErr) {
+                    console.error('[LoadData] IndexedDB initialization failed:', dbErr);
+                    throw new Error('Failed to initialize local database');
+                }
+            } else {
+                console.warn('[LoadData] IndexedDB helper not available');
             }
-        } else {
-            console.warn('[LoadData] IndexedDB helper not available');
-        }
         
         // Step 2: Load business (required for business_id)
         // ALWAYS check cache FIRST, only query Supabase if online
@@ -5506,146 +6057,277 @@ async function loadUserData(userId) {
                 updateNavbarBusinessNameSync(business);
                 console.log('[LoadData] Using cached business:', business.name);
             } else {
-                return; // Cannot proceed without business
+            return; // Cannot proceed without business
+        }
+        }
+        
+        // Step 3: Check if IndexedDB is empty - if so, seed from Supabase FIRST
+        // This ensures data is available when loading on a new device
+        console.log('[LoadData] Checking if IndexedDB needs seeding...');
+        const existingClients = await window.indexedDBHelper.getClientsLocal(userId);
+        const existingMeasurements = await window.indexedDBHelper.getMeasurementsLocal(userId);
+        console.log(`[LoadData] IndexedDB status - Clients: ${existingClients.length}, Measurements: ${existingMeasurements.length}, Online: ${isOnline()}`);
+        
+        if ((existingClients.length === 0 && existingMeasurements.length === 0) && isOnline()) {
+            console.log('[LoadData] IndexedDB is empty - seeding from Supabase...');
+            try {
+                await seedIndexedDBFromSupabase(userId);
+                console.log('[LoadData] Seeding complete - data loaded from Supabase');
+                // After seeding, refresh the data to ensure UI shows the new data
+                // Small delay to ensure IndexedDB writes are complete
+                await new Promise(resolve => setTimeout(resolve, 100));
+            } catch (seedErr) {
+                console.error('[LoadData] Seeding failed:', seedErr);
+                console.error('[LoadData] Seeding error details:', {
+                    message: seedErr.message,
+                    stack: seedErr.stack,
+                    name: seedErr.name
+                });
+                // Continue anyway - user might have local data or be offline
+            }
+        } else {
+            if (existingClients.length > 0 || existingMeasurements.length > 0) {
+                console.log('[LoadData] IndexedDB already has data - skipping seed');
+            } else if (!isOnline()) {
+                console.log('[LoadData] Offline - skipping seed');
             }
         }
         
-        // Step 3: Load clients FIRST from IndexedDB (local data, fast, non-blocking)
-        // This happens BEFORE Supabase sync - UI renders immediately with local data
+        // Step 4: Load clients from IndexedDB (local data, fast, non-blocking)
+        // This happens AFTER Supabase seed (if needed) - UI renders with synced data
         console.log('[LoadData] Loading clients from IndexedDB...');
-        const clients = await getClients(true);
+        let clients = await getClients(true);
         if (!Array.isArray(clients)) {
             console.error('[LoadData] Failed to load clients');
             return;
         }
         console.log('[LoadData] Clients loaded:', clients.length);
         
-        // Step 4: Load measurements from IndexedDB (local data, fast, non-blocking)
+        // Step 5: Load measurements from IndexedDB (local data, fast, non-blocking)
         console.log('[LoadData] Loading measurements from IndexedDB...');
-        const measurements = await getMeasurements(true);
+        let measurements = await getMeasurements(true);
         if (!Array.isArray(measurements)) {
             console.error('[LoadData] Failed to load measurements');
             return;
         }
         console.log('[LoadData] Measurements loaded:', measurements.length);
         
-        // Step 5: Seed IndexedDB from Supabase in BACKGROUND (non-blocking)
-        // This runs AFTER local data is loaded - doesn't block UI
-        // Only runs if online and IndexedDB is empty
-        seedIndexedDBFromSupabase(userId).catch(err => {
-            console.warn('[LoadData] Background seed failed (non-fatal):', err);
-        });
+        // If we just seeded and got data, reload to ensure we have the latest
+        if ((existingClients.length === 0 && existingMeasurements.length === 0) && 
+            (clients.length > 0 || measurements.length > 0)) {
+            console.log('[LoadData] Data was seeded - reloading to ensure consistency...');
+            clients = await getClients(true);
+            measurements = await getMeasurements(true);
+            console.log('[LoadData] Reloaded - Clients:', clients.length, 'Measurements:', measurements.length);
+        }
         
-        // Step 6: Start background sync (silent) - only after data is loaded
-        if (window.syncManager && window.indexedDBHelper) {
-            // Ensure IndexedDB is ready before starting sync
+        // Step 6: Check for unsynced items and sync if online
+        // This handles offline-created items that need to sync when connectivity returns
+        if (isOnline() && window.reconciliation && business) {
             try {
-                await window.indexedDBHelper.getDB(); // Verify DB is accessible
-                window.syncManager.startBackgroundSync();
-                console.log('[LoadData] Background sync started');
+                // Check if there are unsynced items
+                const unsyncedClients = await window.indexedDBHelper.getUnsyncedClients(userId);
+                const unsyncedMeasurements = await window.indexedDBHelper.getUnsyncedMeasurements(userId);
+                
+                if (unsyncedClients.length > 0 || unsyncedMeasurements.length > 0) {
+                    console.log(`[LoadData] Found ${unsyncedClients.length} unsynced clients and ${unsyncedMeasurements.length} unsynced measurements - syncing...`);
+                    // Trigger reconciliation to sync unsynced items
+                    window.reconciliation.reconcileAll(business.id).catch(err => {
+                        console.warn('[LoadData] Reconciliation failed:', err);
+                    });
+                }
             } catch (syncErr) {
-                console.warn('[LoadData] Sync not started - IndexedDB not ready:', syncErr);
+                console.warn('[LoadData] Error checking for unsynced items:', syncErr);
+                // Don't block - continue with normal flow
             }
         }
         
-        // Step 7: Render recent measurements (clients are now loaded)
-        console.log('[LoadData] Rendering recent measurements...');
-        renderRecentMeasurements();
-        console.log('[LoadData] Data load complete');
-    } catch (err) {
-        console.error('[LoadData] Error loading user data:', err);
-    }
+            // Step 7: Render recent measurements (clients are now loaded)
+            console.log('[LoadData] Rendering recent measurements...');
+            renderRecentMeasurements();
+            console.log('[LoadData] Data load complete');
+        } catch (err) {
+            console.error('[LoadData] Error loading user data:', err);
+            throw err;
+        } finally {
+            loadUserDataInProgress = false;
+            loadUserDataPromise = null;
+        }
+    })();
+    
+    return loadUserDataPromise;
 }
 
-// Seed IndexedDB from Supabase (one-time migration on first load)
+// Track if seeding is in progress to prevent duplicates
+let seedingInProgress = false;
+
+// Seed IndexedDB from Supabase (runs when IndexedDB is empty on new device)
 // NOTE: Only runs when online - uses cached data when offline
 async function seedIndexedDBFromSupabase(userId) {
-    if (!window.indexedDBHelper) return;
-    
-    // Do NOT query Supabase if offline
-    if (!isOnline()) {
-        console.log('[Migration] Offline - skipping Supabase seed, using local data');
+    // Prevent concurrent seeding
+    if (seedingInProgress) {
+        console.log('[Seed] Seeding already in progress, skipping...');
         return;
     }
     
+    if (!window.indexedDBHelper) {
+        console.warn('[Seed] IndexedDB helper not available');
+        return;
+    }
+    
+    // Do NOT query Supabase if offline
+    if (!isOnline()) {
+        console.log('[Seed] Offline - skipping Supabase seed, using local data');
+        return;
+    }
+    
+    // Double-check IndexedDB is still empty (might have been populated by another call)
+    const existingClients = await window.indexedDBHelper.getClientsLocal(userId);
+    const existingMeasurements = await window.indexedDBHelper.getMeasurementsLocal(userId);
+    
+    if (existingClients.length > 0 || existingMeasurements.length > 0) {
+        console.log('[Seed] IndexedDB already has data, skipping seed. Clients:', existingClients.length, 'Measurements:', existingMeasurements.length);
+        return;
+    }
+    
+    seedingInProgress = true;
+    
     try {
-        // Check if IndexedDB already has data
-        const existingClients = await window.indexedDBHelper.getClientsLocal(userId);
-        const existingMeasurements = await window.indexedDBHelper.getMeasurementsLocal(userId);
-        
-        // Only seed if IndexedDB is empty
-        if (existingClients.length > 0 || existingMeasurements.length > 0) {
-            return; // Already seeded
-        }
-        
         // Fetch from Supabase (only if online)
         const supabase = await getSupabaseAsync();
-        if (!supabase) return;
+        if (!supabase) {
+            console.warn('[Seed] Supabase client not available');
+            return;
+        }
         
-        const business = await getBusinessForUser(userId);
-        if (!business) return;
+        let business = await getBusinessForUser(userId);
+        if (!business) {
+            const errorMsg = '[Seed] No business found for user - cannot seed data. Please create a business first or ensure your business is linked to your account.';
+            console.error(errorMsg);
+            console.error('[Seed] User ID:', userId);
+            throw new Error(errorMsg);
+        }
         
-        // Fetch clients from Supabase
+        console.log('[Seed] Business found:', business.name, business.id);
+        
+        console.log('[Seed] Fetching clients and measurements from Supabase for user:', userId);
+        console.log('[Seed] Business ID:', business.id);
+        
+        // STRICT FETCH: Fetch clients by business_id ONLY (strict scope)
+        console.log('[Seed] Fetching clients by business_id:', business.id);
         const { data: clientsData, error: clientsError } = await supabase
             .from('clients')
             .select('*')
-            .eq('user_id', userId);
+            .eq('business_id', business.id) // STRICT: Always use business_id scope
+            .order('created_at', { ascending: false });
         
         if (clientsError) {
-            console.warn('[Migration] Error fetching clients:', clientsError);
-            return;
+            console.error('[Seed] Error fetching clients:', clientsError);
+            throw new Error(`Failed to fetch clients: ${clientsError.message}`);
         }
         
+        let clientsSeeded = 0;
         if (clientsData && clientsData.length > 0) {
+            console.log(`[Seed] Found ${clientsData.length} clients in Supabase`);
             for (const client of clientsData) {
-                await window.indexedDBHelper.saveClientLocal({
-                    server_id: client.id,
-                    name: client.name,
-                    phone: client.phone || null,
-                    sex: client.sex || null,
-                    created_at: client.created_at,
-                    synced: true // Already synced
-                }, userId, business.id);
+                try {
+                    // If client doesn't have user_id, update it in Supabase
+                    if (!client.user_id) {
+                        console.log(`[Seed] Updating client ${client.id} with user_id...`);
+                        const { error: updateError } = await supabase
+                            .from('clients')
+                            .update({ user_id: userId })
+                            .eq('id', client.id);
+                        
+                        if (updateError) {
+                            console.warn(`[Seed] Error updating client user_id:`, updateError);
+                        }
+                    }
+                    
+                    await window.indexedDBHelper.saveClientLocal({
+                        server_id: client.id,
+                        name: client.name,
+                        phone: client.phone || null,
+                        sex: client.sex || null,
+                        created_at: client.created_at,
+                        synced: true // Already synced
+                    }, userId, business.id);
+                    clientsSeeded++;
+                } catch (clientErr) {
+                    console.warn('[Seed] Error saving client:', clientErr);
+                }
             }
+            console.log(`[Seed] Seeded ${clientsSeeded} clients to IndexedDB`);
+        } else {
+            console.log('[Seed] No clients found in Supabase');
         }
         
-        // Fetch measurements from Supabase
+        // STRICT FETCH: Fetch measurements by business_id ONLY (strict scope)
+        console.log('[Seed] Fetching measurements by business_id:', business.id);
         const { data: measurementsData, error: measurementsError } = await supabase
             .from('measurements')
             .select('*')
-            .eq('user_id', userId);
+            .eq('business_id', business.id) // STRICT: Always use business_id scope
+            .order('created_at', { ascending: false });
         
         if (measurementsError) {
-            console.warn('[Migration] Error fetching measurements:', measurementsError);
-            return;
+            console.error('[Seed] Error fetching measurements:', measurementsError);
+            throw new Error(`Failed to fetch measurements: ${measurementsError.message}`);
         }
         
+        let measurementsSeeded = 0;
         if (measurementsData && measurementsData.length > 0) {
+            console.log(`[Seed] Found ${measurementsData.length} measurements in Supabase`);
             for (const measurement of measurementsData) {
-                await window.indexedDBHelper.saveMeasurementLocal({
-                    server_id: measurement.id,
-                    client_id: measurement.client_id,
-                    garment_type: measurement.garment_type || null,
-                    shoulder: measurement.shoulder || null,
-                    chest: measurement.chest || null,
-                    waist: measurement.waist || null,
-                    sleeve: measurement.sleeve || null,
-                    length: measurement.length || null,
-                    neck: measurement.neck || null,
-                    hip: measurement.hip || null,
-                    inseam: measurement.inseam || null,
-                    thigh: measurement.thigh || null,
-                    seat: measurement.seat || null,
-                    notes: measurement.notes || null,
-                    custom_fields: measurement.custom_fields || {},
-                    created_at: measurement.created_at,
-                    synced: true // Already synced
-                }, userId, business.id);
+                try {
+                    // If measurement doesn't have user_id, update it in Supabase
+                    if (!measurement.user_id) {
+                        console.log(`[Seed] Updating measurement ${measurement.id} with user_id...`);
+                        const { error: updateError } = await supabase
+                            .from('measurements')
+                            .update({ user_id: userId })
+                            .eq('id', measurement.id);
+                        
+                        if (updateError) {
+                            console.warn(`[Seed] Error updating measurement user_id:`, updateError);
+                        }
+                    }
+                    
+                    await window.indexedDBHelper.saveMeasurementLocal({
+                        server_id: measurement.id,
+                        client_id: measurement.client_id,
+                        garment_type: measurement.garment_type || null,
+                        shoulder: measurement.shoulder || null,
+                        chest: measurement.chest || null,
+                        waist: measurement.waist || null,
+                        sleeve: measurement.sleeve || null,
+                        length: measurement.length || null,
+                        neck: measurement.neck || null,
+                        hip: measurement.hip || null,
+                        inseam: measurement.inseam || null,
+                        thigh: measurement.thigh || null,
+                        seat: measurement.seat || null,
+                        notes: measurement.notes || null,
+                        custom_fields: measurement.custom_fields || {},
+                        created_at: measurement.created_at,
+                        synced: true // Already synced
+                    }, userId, business.id);
+                    measurementsSeeded++;
+                } catch (measurementErr) {
+                    console.warn('[Seed] Error saving measurement:', measurementErr);
+                }
             }
+            console.log(`[Seed] Seeded ${measurementsSeeded} measurements to IndexedDB`);
+        } else {
+            console.log('[Seed] No measurements found in Supabase');
         }
+        
+        console.log(`[Seed] Complete - ${clientsSeeded} clients, ${measurementsSeeded} measurements`);
     } catch (err) {
-        console.warn('[Migration] Error seeding IndexedDB:', err);
-        // Non-fatal - continue anyway
+        console.error('[Seed] Error seeding IndexedDB:', err);
+        throw err; // Re-throw so caller knows it failed
+    } finally {
+        seedingInProgress = false;
     }
 }
 
@@ -5666,9 +6348,9 @@ async function getCurrentUser() {
     if (!supabase) return null;
     
     try {
-        const { data: { user }, error } = await supabase.auth.getUser();
-        if (error || !user) return null;
-        return user;
+    const { data: { user }, error } = await supabase.auth.getUser();
+    if (error || !user) return null;
+    return user;
     } catch (err) {
         console.warn('[getCurrentUser] Network error:', err);
         // Fallback to cached session
@@ -6295,6 +6977,191 @@ async function processPendingSyncQueue() {
 
 // Initialize offline sync system
 // initializeOfflineSync removed - offline sync is disabled
+
+// Global error handler for unhandled promise rejections
+window.addEventListener('unhandledrejection', (event) => {
+    // Log the error but don't show to user (many are from extensions)
+    // Ignore the "message channel closed" error from browser extensions
+    if (event.reason && event.reason.message && event.reason.message.includes('message channel closed')) {
+        // This is from a browser extension, ignore it
+        event.preventDefault();
+        return;
+    }
+    console.warn('[Unhandled Promise Rejection]', event.reason);
+    // Prevent default browser error handling
+    event.preventDefault();
+});
+
+// Global error handler for general errors
+window.addEventListener('error', (event) => {
+    // Ignore extension errors
+    if (event.filename && (event.filename.includes('extension') || event.filename.includes('chrome-extension'))) {
+        return;
+    }
+    // Only log if it's from our code, not extensions
+    if (event.filename && !event.filename.includes('extension')) {
+        console.error('[Global Error]', event.error || event.message);
+    }
+});
+
+// Manual sync function for testing/debugging (expose to window for console access)
+async function manualSyncFromSupabase() {
+    console.log('[ManualSync] Starting manual sync from Supabase...');
+    const user = await getCurrentUser();
+    if (!user) {
+        console.error('[ManualSync] No user logged in');
+        return;
+    }
+    
+    console.log('[ManualSync] User:', user.id, user.email);
+    
+    try {
+        // Clear IndexedDB first (optional - comment out if you want to keep local data)
+        // This forces a fresh seed from Supabase
+        
+        // Get business
+        const business = await getBusinessForUser(user.id);
+        if (!business) {
+            console.error('[ManualSync] No business found for user');
+            return;
+        }
+        
+        console.log('[ManualSync] Business found:', business.name, business.id);
+        
+        // Seed from Supabase
+        await seedIndexedDBFromSupabase(user.id);
+        
+        console.log('[ManualSync] Sync complete - reloading data...');
+        
+        // Reload data
+        await loadUserData(user.id);
+        
+        console.log('[ManualSync] Manual sync complete!');
+    } catch (err) {
+        console.error('[ManualSync] Error:', err);
+    }
+}
+
+// Expose to window for easy access from console
+if (typeof window !== 'undefined') {
+    window.manualSyncFromSupabase = manualSyncFromSupabase;
+    
+    // Auto-sync when coming online (handles offline-created items)
+    window.addEventListener('online', async () => {
+        console.log('[Online] Connectivity restored - checking for unsynced items...');
+        
+        // Wait a bit for network to stabilize (Supabase might not be ready immediately)
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        try {
+            // Try to get user from cached session first (faster, doesn't require network)
+            let user = null;
+            const cachedSession = getCachedSession();
+            if (cachedSession && cachedSession.user) {
+                user = cachedSession.user;
+                console.log('[Online] Using cached user session');
+            } else {
+                // If no cached session, try to get from Supabase with retries
+                let attempts = 0;
+                const maxAttempts = 3;
+                
+                while (!user && attempts < maxAttempts) {
+                    try {
+                        user = await getCurrentUser();
+                        if (!user) {
+                            attempts++;
+                            if (attempts < maxAttempts) {
+                                console.log(`[Online] User not ready yet, retrying... (${attempts}/${maxAttempts})`);
+                                await new Promise(resolve => setTimeout(resolve, 2000 * attempts)); // Exponential backoff
+                            }
+                        }
+                    } catch (err) {
+                        attempts++;
+                        if (attempts < maxAttempts) {
+                            console.log(`[Online] Error getting user, retrying... (${attempts}/${maxAttempts}):`, err.message);
+                            await new Promise(resolve => setTimeout(resolve, 2000 * attempts));
+                        } else {
+                            console.warn('[Online] Failed to get user after retries, will try again later');
+                        }
+                    }
+                }
+            }
+            
+            if (!user) {
+                console.log('[Online] No user available, skipping sync (will retry on next online event)');
+                return;
+            }
+            
+            // Get business (use cached if available)
+            let business = getCachedBusiness();
+            if (!business) {
+                business = await getBusinessForUser(user.id);
+            }
+            
+            if (!business || !business.id) {
+                console.log('[Online] No business found, skipping sync');
+                return;
+            }
+            
+            // Check for unsynced items
+            if (window.indexedDBHelper && window.reconciliation) {
+                const unsyncedClients = await window.indexedDBHelper.getUnsyncedClients(user.id);
+                const unsyncedMeasurements = await window.indexedDBHelper.getUnsyncedMeasurements(user.id);
+                
+                if (unsyncedClients.length > 0 || unsyncedMeasurements.length > 0) {
+                    console.log(`[Online] Found ${unsyncedClients.length} unsynced clients and ${unsyncedMeasurements.length} unsynced measurements - syncing...`);
+                    // Trigger reconciliation to sync unsynced items
+                    const result = await window.reconciliation.reconcileAll(business.id);
+                    console.log('[Online] Sync complete:', result);
+                } else {
+                    console.log('[Online] No unsynced items to sync');
+                }
+            }
+        } catch (err) {
+            console.error('[Online] Error syncing on reconnect:', err);
+            // Don't throw - this is a background operation
+        }
+    });
+    
+    // Helper function to fix clients' business_id
+    window.fixClientsBusinessId = async function() {
+        try {
+            const user = await getCurrentUser();
+            if (!user) {
+                console.error('[fixClientsBusinessId] No user logged in');
+                return { error: 'No user logged in' };
+            }
+            
+            const business = await getBusinessForUser(user.id);
+            if (!business || !business.id) {
+                console.error('[fixClientsBusinessId] No business found for user');
+                return { error: 'No business found for user' };
+            }
+            
+            console.log('[fixClientsBusinessId] Fixing clients business_id to:', business.id);
+            
+            // Get all clients for this user
+            const clients = await window.indexedDBHelper.getClientsLocal(user.id);
+            let fixed = 0;
+            
+            for (const client of clients) {
+                if (client.business_id !== business.id) {
+                    console.log(`[fixClientsBusinessId] Fixing client ${client.name || client.id}: ${client.business_id} -> ${business.id}`);
+                    await window.indexedDBHelper.updateClientLocal(client.local_id, { 
+                        business_id: business.id 
+                    }, user.id);
+                    fixed++;
+                }
+            }
+            
+            console.log(`[fixClientsBusinessId] Fixed ${fixed} clients' business_id`);
+            return { fixed, total: clients.length };
+        } catch (err) {
+            console.error('[fixClientsBusinessId] Error fixing clients business_id:', err);
+            return { error: err.message };
+        }
+    };
+}
 
 // Wait for DOM to be ready
 if (document.readyState === 'loading') {

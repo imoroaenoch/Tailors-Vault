@@ -1222,6 +1222,8 @@ export default function Home() {
 
       <Script src="/indexeddb.js" strategy="beforeInteractive" />
       <Script src="/sync-manager.js" strategy="beforeInteractive" />
+      <Script src="/reconciliation.js" strategy="beforeInteractive" />
+      <Script src="/immediate-sync.js" strategy="beforeInteractive" />
       <Script src="/app.js" strategy="afterInteractive" />
       
       {/* Mobile Footer Navigation */}

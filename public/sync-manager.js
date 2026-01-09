@@ -62,14 +62,26 @@ async function resolveClientIdForSync(clientId, userId) {
     }
 }
 
-// Sync a single client to Supabase
+// BACKGROUND SYNC DISABLED - This function is kept for compatibility but should not be called
+// All sync must be explicit via reconciliation function
 async function syncClient(client, userId, businessId) {
+    console.warn('[Sync] syncClient called but background sync is DISABLED');
+    return false;
+    
+    // CODE BELOW DISABLED - Background sync not allowed
+    /*
     const supabase = getSupabase();
     if (!supabase) return false;
 
+    // STRICT GUARD: Verify business_id exists before insert
+    if (!businessId) {
+        console.error('[Sync] CRITICAL: Cannot sync client without business_id');
+        return false;
+    }
+
     try {
         if (client.server_id) {
-            // Update existing client
+            // Update existing client - STRICT: Use business_id scope
             const { data, error } = await supabase
                 .from('clients')
                 .update({
@@ -78,17 +90,33 @@ async function syncClient(client, userId, businessId) {
                     sex: client.sex || null
                 })
                 .eq('id', client.server_id)
-                .eq('user_id', userId)
+                .eq('business_id', businessId) // STRICT: Always use business_id scope
                 .select()
                 .single();
 
             if (error) throw error;
             return true;
         } else {
-            // Create new client
+            // Create new client - STRICT: Verify business_id exists first
+            // Verify business exists before insert
+            const { data: businessCheck, error: businessError } = await supabase
+                .from('businesses')
+                .select('id')
+                .eq('id', businessId)
+                .single();
+            
+            if (businessError || !businessCheck) {
+                console.error('[Sync] CRITICAL: Business not found, cannot create client');
+                throw new Error('Business not found');
+            }
+            
+            // Generate UUID ONCE (if not already set)
+            const clientId = client.server_id || generateUUID();
+            
             const { data, error } = await supabase
                 .from('clients')
                 .insert([{
+                    id: clientId, // UUID generated ONCE
                     user_id: userId,
                     business_id: businessId,
                     name: client.name,
@@ -108,23 +136,49 @@ async function syncClient(client, userId, businessId) {
         console.warn('[Sync] Failed to sync client:', client.local_id, error);
         return false;
     }
+    */
 }
 
-// Sync a single measurement to Supabase
+// BACKGROUND SYNC DISABLED - This function is kept for compatibility but should not be called
+// All sync must be explicit via reconciliation function
 async function syncMeasurement(measurement, userId, businessId) {
+    console.warn('[Sync] syncMeasurement called but background sync is DISABLED');
+    return false;
+    
+    // CODE BELOW DISABLED - Background sync not allowed
+    /*
     const supabase = getSupabase();
     if (!supabase) return false;
+
+    // STRICT GUARD: Verify business_id and client_id exist before insert
+    if (!businessId) {
+        console.error('[Sync] CRITICAL: Cannot sync measurement without business_id');
+        return false;
+    }
 
     try {
         // Resolve client_id (convert local_id to server_id if needed)
         const resolvedClientId = await resolveClientIdForSync(measurement.client_id, userId);
         if (!resolvedClientId) {
-            console.warn('[Sync] Cannot sync measurement: client not found');
+            console.error('[Sync] CRITICAL: Cannot sync measurement: client_id not found');
+            return false;
+        }
+
+        // STRICT GUARD: Verify client belongs to business
+        const { data: clientCheck, error: clientError } = await supabase
+            .from('clients')
+            .select('id, business_id')
+            .eq('id', resolvedClientId)
+            .eq('business_id', businessId)
+            .single();
+        
+        if (clientError || !clientCheck || clientCheck.business_id !== businessId) {
+            console.error('[Sync] CRITICAL: Client does not belong to business');
             return false;
         }
 
         if (measurement.server_id) {
-            // Update existing measurement
+            // Update existing measurement - STRICT: Use business_id scope
             const { data, error } = await supabase
                 .from('measurements')
                 .update({
@@ -143,17 +197,21 @@ async function syncMeasurement(measurement, userId, businessId) {
                     custom_fields: measurement.custom_fields || {}
                 })
                 .eq('id', measurement.server_id)
-                .eq('user_id', userId)
+                .eq('business_id', businessId) // STRICT: Always use business_id scope
                 .select()
                 .single();
 
             if (error) throw error;
             return true;
         } else {
-            // Create new measurement
+            // Create new measurement - STRICT: Verify parent UUIDs exist
+            // Generate UUID ONCE (if not already set)
+            const measurementId = measurement.server_id || generateUUID();
+            
             const { data, error } = await supabase
                 .from('measurements')
                 .insert([{
+                    id: measurementId, // UUID generated ONCE
                     user_id: userId,
                     business_id: businessId,
                     client_id: resolvedClientId,
@@ -184,111 +242,40 @@ async function syncMeasurement(measurement, userId, businessId) {
         console.warn('[Sync] Failed to sync measurement:', measurement.local_id, error);
         return false;
     }
+    */
 }
 
-// Sync all unsynced clients
+// BACKGROUND SYNC DISABLED - All functions below return immediately
+// All sync must be explicit via reconciliation function
+
+// Sync all unsynced clients - DISABLED
 async function syncClients(userId, businessId) {
-    if (!isOnline()) return;
-
-    const unsyncedClients = await window.indexedDBHelper.getUnsyncedClients(userId);
-    if (unsyncedClients.length === 0) return;
-
-    // Sync clients in batches of 5
-    const batchSize = 5;
-    for (let i = 0; i < unsyncedClients.length; i += batchSize) {
-        const batch = unsyncedClients.slice(i, i + batchSize);
-        await Promise.all(batch.map(client => syncClient(client, userId, businessId)));
-    }
+    console.warn('[Sync] syncClients called but background sync is DISABLED');
+    return;
 }
 
-// Sync all unsynced measurements
+// Sync all unsynced measurements - DISABLED
 async function syncMeasurements(userId, businessId) {
-    if (!isOnline()) return;
-
-    const unsyncedMeasurements = await window.indexedDBHelper.getUnsyncedMeasurements(userId);
-    if (unsyncedMeasurements.length === 0) return;
-
-    // Sync measurements in batches of 5
-    const batchSize = 5;
-    for (let i = 0; i < unsyncedMeasurements.length; i += batchSize) {
-        const batch = unsyncedMeasurements.slice(i, i + batchSize);
-        await Promise.all(batch.map(measurement => syncMeasurement(measurement, userId, businessId)));
-    }
+    console.warn('[Sync] syncMeasurements called but background sync is DISABLED');
+    return;
 }
 
-// Main sync function - runs silently in background
+// Main sync function - DISABLED
 async function performSync() {
-    if (isSyncing) return; // Prevent concurrent syncs
-    if (!isOnline()) return;
-
-    // CRITICAL: Ensure IndexedDB is initialized before syncing
-    if (!window.indexedDBHelper) {
-        console.warn('[Sync] IndexedDB helper not available, skipping sync');
-        return;
-    }
-    
-    try {
-        // Verify IndexedDB is accessible
-        await window.indexedDBHelper.getDB();
-    } catch (dbErr) {
-        console.warn('[Sync] IndexedDB not ready, skipping sync:', dbErr);
-        return;
-    }
-
-    const user = await getCurrentUser();
-    if (!user) return;
-
-    const business = await getBusinessForUser(user.id);
-    if (!business) return;
-
-    isSyncing = true;
-
-    try {
-        // Sync clients first (measurements depend on clients)
-        await syncClients(user.id, business.id);
-        
-        // Then sync measurements
-        await syncMeasurements(user.id, business.id);
-        
-        // After sync, trigger re-render of measurements to update client names
-        if (typeof renderRecentMeasurements === 'function') {
-            // Small delay to ensure IndexedDB updates are reflected
-            setTimeout(() => {
-                renderRecentMeasurements().catch(err => {
-                    console.warn('[Sync] Error re-rendering measurements:', err);
-                });
-            }, 500);
-        }
-    } catch (error) {
-        console.warn('[Sync] Sync error:', error);
-    } finally {
-        isSyncing = false;
-    }
+    console.warn('[Sync] performSync called but background sync is DISABLED');
+    return;
 }
 
-// Start background sync
+// Start background sync - DISABLED
 function startBackgroundSync() {
-    // Perform initial sync
-    performSync();
-
-    // Set up interval sync
-    if (syncIntervalId) {
-        clearInterval(syncIntervalId);
-    }
-    syncIntervalId = setInterval(performSync, SYNC_INTERVAL);
-
-    // Sync when coming online
-    window.addEventListener('online', () => {
-        performSync();
-    });
+    console.warn('[Sync] startBackgroundSync called but background sync is DISABLED');
+    // Do nothing - background sync is disabled
 }
 
-// Stop background sync
+// Stop background sync - DISABLED
 function stopBackgroundSync() {
-    if (syncIntervalId) {
-        clearInterval(syncIntervalId);
-        syncIntervalId = null;
-    }
+    console.warn('[Sync] stopBackgroundSync called but background sync is DISABLED');
+    // Do nothing - background sync is disabled
 }
 
 // Export functions
