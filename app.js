@@ -54,14 +54,14 @@ const GARMENT_FIELDS = {
     'Senator': ['shoulder', 'chest', 'sleeve', 'length', 'neck'],
     'Suit': ['shoulder', 'chest', 'sleeve', 'length', 'neck'],
     'Blazer': ['shoulder', 'chest', 'sleeve', 'length', 'neck'],
-    
+
     // Trousers / Pants / Shorts
     'Trousers / Pants': ['waist', 'hip', 'inseam', 'length', 'thigh', 'seat'],
     'Shorts': ['waist', 'hip', 'inseam', 'length', 'thigh', 'seat'],
-    
+
     // Skirt
     'Skirt': ['waist', 'hip', 'length'],
-    
+
     // Dress / Gown
     'Dress / Gown': ['shoulder', 'chest', 'waist', 'hip', 'sleeve', 'length', 'neck']
 };
@@ -89,12 +89,12 @@ async function hasBusiness() {
     if (isUserLoggedOut()) {
         return false;
     }
-    
+
     const supabase = getSupabase();
     if (!supabase) return false;
-    
+
     const deviceId = getDeviceId();
-    
+
     // Only check for business linked to this device
     const { data, error } = await supabase
         .from('businesses')
@@ -102,7 +102,7 @@ async function hasBusiness() {
         .eq('device_id', deviceId)
         .limit(1)
         .single();
-    
+
     return !error && data && data.id;
 }
 
@@ -112,24 +112,24 @@ async function getBusiness() {
     if (isUserLoggedOut()) {
         return null;
     }
-    
+
     const supabase = getSupabase();
     if (!supabase) return null;
-    
+
     const deviceId = getDeviceId();
-    
+
     // First, check if we have a stored business ID in session
     const storedBusinessId = localStorage.getItem(CURRENT_BUSINESS_ID_KEY);
-    
+
     if (storedBusinessId) {
         // Fetch the specific business by ID and verify it belongs to this device
-    const { data, error } = await supabase
-        .from('businesses')
-        .select('*')
+        const { data, error } = await supabase
+            .from('businesses')
+            .select('*')
             .eq('id', storedBusinessId)
             .eq('device_id', deviceId)
             .single();
-        
+
         if (!error && data) {
             // Convert to match old format
             return {
@@ -143,7 +143,7 @@ async function getBusiness() {
         // If stored ID is invalid or doesn't belong to this device, clear it
         localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
     }
-    
+
     // Get business linked to this device (no fallback to other businesses)
     const { data, error } = await supabase
         .from('businesses')
@@ -151,12 +151,12 @@ async function getBusiness() {
         .eq('device_id', deviceId)
         .limit(1)
         .single();
-    
+
     if (error || !data) return null;
-    
+
     // Store the ID for future use
     localStorage.setItem(CURRENT_BUSINESS_ID_KEY, data.id);
-    
+
     // Convert to match old format
     return {
         id: data.id,
@@ -175,7 +175,7 @@ function generateUUID() {
         return crypto.randomUUID();
     }
     // Fallback to manual generation
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
         const r = Math.random() * 16 | 0;
         const v = c === 'x' ? r : (r & 0x3 | 0x8);
         return v.toString(16);
@@ -199,11 +199,11 @@ async function createBusiness(name, email, phone) {
         console.error('Supabase client not available');
         return null;
     }
-    
+
     try {
         // Get device ID and link business to this device
         const deviceId = getDeviceId();
-        
+
         // Let Supabase generate the ID automatically (no manual ID assignment)
         // Email is optional - use null if empty
         const businessData = {
@@ -211,7 +211,7 @@ async function createBusiness(name, email, phone) {
             phone: phone.trim(),
             device_id: deviceId
         };
-        
+
         // Only include email if provided
         const emailTrimmed = email.trim();
         if (emailTrimmed) {
@@ -219,27 +219,27 @@ async function createBusiness(name, email, phone) {
         } else {
             businessData.email = null;
         }
-        
+
         const { data, error } = await supabase
             .from('businesses')
             .insert([businessData])
             .select()
             .single();
-        
+
         if (error) {
             console.error('Error creating business:', error);
             console.error('Error details:', JSON.stringify(error, null, 2));
             return null;
         }
-        
+
         if (!data) {
             console.error('No data returned from insert');
             return null;
         }
-        
+
         // Store the business ID in localStorage for session tracking
         localStorage.setItem(CURRENT_BUSINESS_ID_KEY, data.id);
-        
+
         // Convert to match old format
         return {
             id: data.id,
@@ -258,36 +258,36 @@ async function createBusiness(name, email, phone) {
 async function updateBusiness(name, email, phone) {
     const supabase = getSupabase();
     if (!supabase) return null;
-    
+
     // Get current business ID
     const currentBusiness = await getBusiness();
     if (!currentBusiness) return null;
-    
+
     // Email is optional - use null if empty
     const updateData = {
-            name: name.trim(),
-            phone: phone.trim()
+        name: name.trim(),
+        phone: phone.trim()
     };
-    
+
     const emailTrimmed = email.trim();
     if (emailTrimmed) {
         updateData.email = emailTrimmed;
     } else {
         updateData.email = null;
     }
-    
+
     const { data, error } = await supabase
         .from('businesses')
         .update(updateData)
         .eq('id', currentBusiness.id)
         .select()
         .single();
-    
+
     if (error) {
         console.error('Error updating business:', error);
         return null;
     }
-    
+
     // Convert to match old format
     return {
         id: data.id,
@@ -309,16 +309,16 @@ async function updateBusiness(name, email, phone) {
 async function matchBusiness(name, email, phone) {
     const business = await getBusiness();
     if (!business) return false;
-    
+
     // Name and phone must match
     const nameMatch = business.name.toLowerCase().trim() === name.toLowerCase().trim();
     const phoneMatch = business.phone.trim() === phone.trim();
-    
+
     // Email matching: if email is provided, it must match; if not provided, business email can be null/empty
     const emailTrimmed = email.trim();
     const businessEmail = business.email ? business.email.toLowerCase().trim() : '';
     const emailMatch = emailTrimmed ? (businessEmail === emailTrimmed.toLowerCase()) : (!businessEmail);
-    
+
     return nameMatch && phoneMatch && emailMatch;
 }
 
@@ -326,9 +326,9 @@ async function matchBusiness(name, email, phone) {
 async function findBusinessByCredentials(name, email, phone) {
     const supabase = getSupabase();
     if (!supabase) return null;
-    
+
     const deviceId = getDeviceId();
-    
+
     try {
         // Build query - email is optional
         let query = supabase
@@ -337,7 +337,7 @@ async function findBusinessByCredentials(name, email, phone) {
             .eq('name', name.trim())
             .eq('phone', phone.trim())
             .eq('device_id', deviceId);
-        
+
         // Only match email if provided
         const emailTrimmed = email.trim();
         if (emailTrimmed) {
@@ -346,19 +346,19 @@ async function findBusinessByCredentials(name, email, phone) {
             // If no email provided, match businesses with null or empty email
             query = query.or('email.is.null,email.eq.');
         }
-        
+
         const { data, error } = await query.limit(1);
-        
+
         // Check if we got results and no error
         if (error || !data || data.length === 0) {
             return null;
         }
-        
+
         const business = data[0];
-        
+
         // Store the business ID for session tracking
         localStorage.setItem(CURRENT_BUSINESS_ID_KEY, business.id);
-        
+
         // Convert to match old format
         return {
             id: business.id,
@@ -379,27 +379,27 @@ function logoutBusiness() {
     localStorage.removeItem(VAULT_DATA_KEY);
     localStorage.removeItem(LEGACY_CLIENTS_KEY);
     localStorage.removeItem(LEGACY_MEASUREMENTS_KEY);
-    
+
     // Clear current business session ID
     localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
-    
+
     // Clear measurement draft on logout
     clearMeasurementDraft();
-    
+
     // Release wake lock on logout
     deactivateMeasurementWakeLock();
-    
+
     // Set logged out state in localStorage (persists across refreshes)
     // This ensures that after logout, refreshing or reopening the app always shows Business Registration
     localStorage.setItem(LOGOUT_STATE_KEY, 'true');
-    
+
     // Clear all sessionStorage items (clients, measurements, etc.)
     try {
         sessionStorage.clear();
     } catch (e) {
         console.warn('Error clearing sessionStorage:', e);
     }
-    
+
     // Reset all in-memory variables
     currentClientId = null;
     currentMeasurementId = null;
@@ -407,30 +407,30 @@ function logoutBusiness() {
     previousScreen = 'home-screen';
     recentMeasurementsOffset = 0;
     recentMeasurementsExpanded = false;
-    
+
     // Reset all forms
     const businessLoginForm = document.getElementById('business-login-form');
     if (businessLoginForm) {
         businessLoginForm.reset();
     }
-    
+
     const businessSetupForm = document.getElementById('business-setup-form');
     if (businessSetupForm) {
         businessSetupForm.reset();
     }
-    
+
     const measurementForm = document.getElementById('measurement-form');
     if (measurementForm) {
         measurementForm.reset();
         // Also reset the form state
         resetMeasurementForm();
     }
-    
+
     const editBusinessForm = document.getElementById('edit-business-form');
     if (editBusinessForm) {
         editBusinessForm.reset();
     }
-    
+
     const editClientForm = document.getElementById('edit-client-form');
     if (editClientForm) {
         editClientForm.reset();
@@ -457,7 +457,7 @@ function resetBusiness() {
     localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
     // Clear logout state as well (user will need to register again)
     localStorage.removeItem(LOGOUT_STATE_KEY);
-    
+
     // Clear sessionStorage
     try {
         sessionStorage.clear();
@@ -476,7 +476,7 @@ async function initStorage() {
         showScreen('business-setup-screen');
         return false;
     }
-    
+
     // Step 2: User is not logged out - check if business exists in Supabase
     const hasBiz = await hasBusiness();
     if (!hasBiz) {
@@ -485,7 +485,7 @@ async function initStorage() {
         showScreen('business-setup-screen');
         return false;
     }
-    
+
     // Step 3: Check for active measurement session BEFORE showing dashboard
     // If active session exists, we'll restore it instead of showing dashboard
     const hasActiveSession = hasActiveMeasurementSession();
@@ -494,7 +494,7 @@ async function initStorage() {
         // Return true to indicate valid session, but don't show dashboard yet
         return true;
     }
-    
+
     // Step 4: Valid session exists, no active measurement - continue to dashboard (normal flow)
     return true;
 }
@@ -503,21 +503,21 @@ async function initStorage() {
 async function getClients() {
     const supabase = getSupabase();
     if (!supabase) return [];
-    
+
     const business = await getBusiness();
     if (!business) return [];
-    
+
     const { data, error } = await supabase
         .from('clients')
         .select('*')
         .eq('business_id', business.id)
         .order('created_at', { ascending: false });
-    
+
     if (error) {
         console.error('Error fetching clients:', error);
         return [];
     }
-    
+
     // Convert to match old format - ensure always returns array
     const normalizedData = Array.isArray(data) ? data : [];
     return normalizedData.map(c => ({
@@ -533,21 +533,21 @@ async function getClients() {
 async function getMeasurements() {
     const supabase = getSupabase();
     if (!supabase) return [];
-    
+
     const business = await getBusiness();
     if (!business) return [];
-    
+
     const { data, error } = await supabase
         .from('measurements')
         .select('*')
         .eq('business_id', business.id)
         .order('created_at', { ascending: false });
-    
+
     if (error) {
         console.error('Error fetching measurements:', error);
         return [];
     }
-    
+
     // Convert to legacy format for compatibility - ensure always returns array
     const normalizedData = Array.isArray(data) ? data : [];
     return normalizedData.map(m => ({
@@ -581,7 +581,7 @@ async function saveClients(clients) {
 async function updateClient(clientId, name, phone, sex) {
     const supabase = getSupabase();
     if (!supabase) return null;
-    
+
     const { data, error } = await supabase
         .from('clients')
         .update({
@@ -592,12 +592,12 @@ async function updateClient(clientId, name, phone, sex) {
         .eq('id', clientId)
         .select()
         .single();
-    
+
     if (error) {
         console.error('Error updating client:', error);
         return null;
     }
-    
+
     // Convert to match old format
     return {
         id: data.id,
@@ -612,13 +612,13 @@ async function updateClient(clientId, name, phone, sex) {
 async function deleteClient(clientId) {
     const supabase = getSupabase();
     if (!supabase) return;
-    
+
     // Delete measurements first (cascade should handle this, but being explicit)
     await supabase
         .from('measurements')
         .delete()
         .eq('client_id', clientId);
-    
+
     // Delete client
     await supabase
         .from('clients')
@@ -637,31 +637,31 @@ async function saveMeasurements(legacyMeasurements) {
 async function findOrCreateClient(name, phone, sex) {
     const supabase = getSupabase();
     if (!supabase) return null;
-    
+
     const business = await getBusiness();
     if (!business) return null;
-    
+
     const phoneNormalized = phone ? phone.trim() : '';
     const nameNormalized = name.toLowerCase().trim();
-    
+
     // Try to find existing client by name and phone
     let query = supabase
         .from('clients')
         .select('*')
         .eq('business_id', business.id)
         .eq('name', name.trim());
-    
+
     if (phoneNormalized) {
         query = query.eq('phone', phoneNormalized);
     } else {
         query = query.is('phone', null);
     }
-    
+
     const { data: existingClients, error: searchError } = await query.limit(1);
-    
+
     if (!searchError && existingClients && existingClients.length > 0) {
         let client = existingClients[0];
-        
+
         // Update phone if provided and different
         if (phoneNormalized && client.phone !== phoneNormalized) {
             const updatedClient = await updateClient(client.id, name, phoneNormalized, client.sex || sex);
@@ -669,7 +669,7 @@ async function findOrCreateClient(name, phone, sex) {
                 client = updatedClient;
             }
         }
-        
+
         // Update sex if provided and different
         if (sex && client.sex !== sex) {
             const updatedClient = await updateClient(client.id, name, client.phone || phoneNormalized, sex);
@@ -677,7 +677,7 @@ async function findOrCreateClient(name, phone, sex) {
                 client = updatedClient;
             }
         }
-        
+
         // Convert to match old format
         return {
             id: client.id,
@@ -687,7 +687,7 @@ async function findOrCreateClient(name, phone, sex) {
             createdAt: client.created_at
         };
     }
-    
+
     // Create new client - let Supabase generate the ID automatically
     const { data: newClient, error: insertError } = await supabase
         .from('clients')
@@ -699,12 +699,12 @@ async function findOrCreateClient(name, phone, sex) {
         }])
         .select()
         .single();
-    
+
     if (insertError) {
         console.error('Error creating client:', insertError);
         return null;
     }
-    
+
     // Convert to match old format
     return {
         id: newClient.id,
@@ -719,10 +719,10 @@ async function findOrCreateClient(name, phone, sex) {
 function updateGarmentTypes(sex) {
     const garmentSelect = document.getElementById('garment-type');
     const currentValue = garmentSelect.value;
-    
+
     // Clear existing options except the first one
     garmentSelect.innerHTML = '<option value="">Select garment type</option>';
-    
+
     if (sex && GARMENT_TYPES[sex]) {
         GARMENT_TYPES[sex].forEach(garment => {
             const option = document.createElement('option');
@@ -730,7 +730,7 @@ function updateGarmentTypes(sex) {
             option.textContent = garment;
             garmentSelect.appendChild(option);
         });
-        
+
         // Try to restore previous selection if it's still valid
         if (currentValue && GARMENT_TYPES[sex].includes(currentValue)) {
             garmentSelect.value = currentValue;
@@ -754,7 +754,7 @@ function updateGarmentTypes(sex) {
 function handleCustomGarmentVisibility(garmentType) {
     const customGarmentGroup = document.getElementById('custom-garment-group');
     const customGarmentInput = document.getElementById('custom-garment-name');
-    
+
     if (garmentType === 'Custom') {
         customGarmentGroup.style.display = 'block';
         customGarmentInput.required = true;
@@ -768,7 +768,7 @@ function handleCustomGarmentVisibility(garmentType) {
 // Handle Add Measurement Field button visibility
 function handleAddFieldButtonVisibility(garmentType) {
     const addFieldWrapper = document.getElementById('add-custom-field-wrapper');
-    
+
     if (garmentType && garmentType !== '') {
         // Show the Add Measurement Field button when any garment type is selected
         addFieldWrapper.style.display = 'flex';
@@ -781,7 +781,7 @@ function handleAddFieldButtonVisibility(garmentType) {
 // Update measurement fields visibility based on garment type
 function updateMeasurementFields(garmentType) {
     const allFields = ['shoulder', 'chest', 'waist', 'sleeve', 'length', 'neck', 'hip', 'inseam', 'thigh', 'seat'];
-    
+
     // For Custom garment type, show ALL fields
     if (garmentType === 'Custom') {
         allFields.forEach(field => {
@@ -792,7 +792,7 @@ function updateMeasurementFields(garmentType) {
         });
         return;
     }
-    
+
     if (!garmentType || !GARMENT_FIELDS[garmentType]) {
         // Hide all fields if no garment type selected
         allFields.forEach(field => {
@@ -803,9 +803,9 @@ function updateMeasurementFields(garmentType) {
         });
         return;
     }
-    
+
     const requiredFields = GARMENT_FIELDS[garmentType];
-    
+
     // Show/hide fields based on garment type
     allFields.forEach(field => {
         const fieldElement = document.getElementById(field);
@@ -828,21 +828,21 @@ async function checkExistingClient() {
     const name = nameInput.value.trim();
     const sexSelect = document.getElementById('client-sex');
     const phoneInput = document.getElementById('phone-number');
-    
+
     if (!name) {
         sexSelect.disabled = false;
         sexSelect.required = true;
         updateGarmentTypes('');
         return;
     }
-    
+
     const clients = await getClients();
     if (!Array.isArray(clients)) return;
-    
-    const existingClient = clients.find(c => 
+
+    const existingClient = clients.find(c =>
         c.name.toLowerCase() === name.toLowerCase()
     );
-    
+
     if (existingClient) {
         // Client exists - pre-fill sex and phone
         if (existingClient.sex) {
@@ -876,13 +876,13 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
         console.error('Supabase client not available');
         return null;
     }
-    
+
     const business = await getBusiness();
     if (!business) {
         console.error('Business not found');
         return null;
     }
-    
+
     if (measurementId) {
         // Update existing measurement
         const { data, error } = await supabase
@@ -906,12 +906,12 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
             .eq('id', measurementId)
             .select()
             .single();
-        
+
         if (error) {
             console.error('Error updating measurement:', error);
             return null;
         }
-        
+
         // Convert to match old format
         return {
             id: data.id,
@@ -955,12 +955,12 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
             }])
             .select()
             .single();
-        
+
         if (error) {
             console.error('Error creating measurement:', error);
             return null;
         }
-        
+
         // Convert to match old format
         return {
             id: data.id,
@@ -987,10 +987,10 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
 async function editMeasurement(measurementId, clientId) {
     // Clear any existing draft when editing (we're loading specific measurement data)
     clearMeasurementDraft();
-    
+
     const measurements = await getMeasurements();
     const clients = await getClients();
-    
+
     if (!Array.isArray(measurements)) {
         alert('Error loading measurements');
         return;
@@ -999,38 +999,38 @@ async function editMeasurement(measurementId, clientId) {
         alert('Error loading clients');
         return;
     }
-    
+
     const measurement = measurements.find(m => m.id === measurementId);
     const client = clients.find(c => c.id === clientId);
-    
+
     if (!measurement || !client) {
         alert('Measurement or client not found');
         return;
     }
-    
+
     currentMeasurementId = measurementId;
     currentClientId = clientId;
-    
+
     // Update form header
     document.querySelector('#new-measurement-screen h2').textContent = 'Edit Measurement';
-    
+
     // Pre-fill form with measurement data
     document.getElementById('client-name').value = client.name;
     document.getElementById('client-name').disabled = true;
     document.getElementById('phone-number').value = client.phone || '';
-    
+
     if (client.sex) {
         document.getElementById('client-sex').value = client.sex;
         document.getElementById('client-sex').disabled = true;
         document.getElementById('client-sex').required = false;
         updateGarmentTypes(client.sex);
     }
-    
+
     // Set garment type and update fields
     if (measurement.garment_type) {
         const garmentSelect = document.getElementById('garment-type');
         const isCustomGarment = !GARMENT_TYPES[client.sex]?.includes(measurement.garment_type);
-        
+
         if (isCustomGarment) {
             // This is a custom garment type - set dropdown to "Custom" and fill in the name
             garmentSelect.value = 'Custom';
@@ -1043,7 +1043,7 @@ async function editMeasurement(measurementId, clientId) {
         }
         handleAddFieldButtonVisibility(measurement.garment_type || 'Custom');
     }
-    
+
     // Fill in all measurement values
     document.getElementById('shoulder').value = measurement.shoulder || '';
     document.getElementById('chest').value = measurement.chest || '';
@@ -1056,7 +1056,7 @@ async function editMeasurement(measurementId, clientId) {
     document.getElementById('thigh').value = measurement.thigh || '';
     document.getElementById('seat').value = measurement.seat || '';
     document.getElementById('notes').value = measurement.notes || '';
-    
+
     // Load custom fields
     const customFieldsContainer = document.getElementById('custom-fields-container');
     customFieldsContainer.innerHTML = '';
@@ -1067,7 +1067,7 @@ async function editMeasurement(measurementId, clientId) {
             }
         });
     }
-    
+
     // Show measurement form
     showScreen('new-measurement-screen');
     setupMeasurementDraftAutoSave();
@@ -1078,24 +1078,24 @@ async function deleteMeasurement(measurementId, clientId) {
     if (!confirm('Are you sure you want to delete this measurement?')) {
         return;
     }
-    
+
     const supabase = getSupabase();
     if (!supabase) {
         console.error('Supabase client not available');
         return;
     }
-    
+
     const { error } = await supabase
         .from('measurements')
         .delete()
         .eq('id', measurementId);
-    
+
     if (error) {
         console.error('Error deleting measurement:', error);
         alert('Error deleting measurement');
         return;
     }
-    
+
     // Return to client detail view
     await showClientDetails(clientId, previousScreen);
 }
@@ -1120,7 +1120,7 @@ async function updateBusinessHeader() {
 async function updateNavbarBusinessName() {
     const business = await getBusiness();
     const businessName = (business && business.name && !isUserLoggedOut()) ? business.name : 'Tailors Vault';
-    
+
     document.querySelectorAll('.navbar-business-name').forEach(element => {
         element.textContent = businessName;
         if (business && business.name) {
@@ -1142,20 +1142,20 @@ function showScreen(screenId) {
             stopMeasurementDraftAutoSave();
         }
     }
-    
+
     document.querySelectorAll('.screen').forEach(screen => {
         screen.classList.remove('active');
     });
     document.getElementById(screenId).classList.add('active');
-    
+
     // Update business header when showing home screen
     if (screenId === 'home-screen') {
         updateBusinessHeader();
     }
-    
+
     // Update business name in all navbar instances
     updateNavbarBusinessName();
-    
+
     // Setup auto-save and wake lock if navigating to measurement screen
     if (screenId === 'new-measurement-screen') {
         // Small delay to ensure form is ready
@@ -1228,7 +1228,7 @@ let currentMeasurementId = null;
 // Form Submission
 document.getElementById('measurement-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    
+
     // Handle custom garment type
     let garmentType = document.getElementById('garment-type').value;
     if (garmentType === 'Custom') {
@@ -1239,7 +1239,7 @@ document.getElementById('measurement-form').addEventListener('submit', async (e)
         }
         garmentType = customGarmentName;
     }
-    
+
     // Collect custom fields from inline inputs
     const customFields = {};
     const customFieldGroups = document.querySelectorAll('#custom-fields-container .custom-field-group');
@@ -1253,7 +1253,7 @@ document.getElementById('measurement-form').addEventListener('submit', async (e)
             }
         }
     });
-    
+
     const formData = {
         clientName: document.getElementById('client-name').value.trim(),
         phone: document.getElementById('phone-number').value.trim(),
@@ -1272,35 +1272,35 @@ document.getElementById('measurement-form').addEventListener('submit', async (e)
         notes: document.getElementById('notes').value.trim(),
         customFields: customFields
     };
-    
+
     if (!formData.clientName) {
         alert('Client name is required');
         return;
     }
-    
+
     if (!formData.sex) {
         alert('Sex is required');
         return;
     }
-    
+
     // Find or create client
     const client = await findOrCreateClient(formData.clientName, formData.phone, formData.sex);
     if (!client) {
         alert('Error creating/finding client');
         return;
     }
-    
+
     // Save measurement (create or update)
     const savedMeasurement = await saveMeasurement(client.id, formData, currentMeasurementId);
-    
+
     // Only clear draft and reset form if save was successful
     if (savedMeasurement) {
         // Clear draft after successful save
         clearMeasurementDraft();
-        
+
         // Release wake lock after successful save
         deactivateMeasurementWakeLock();
-        
+
         // Reset form
         resetMeasurementForm();
     } else {
@@ -1308,7 +1308,7 @@ document.getElementById('measurement-form').addEventListener('submit', async (e)
         saveMeasurementDraft();
         return; // Don't navigate away if save failed
     }
-    
+
     // Return to appropriate screen
     if (currentClientId && currentClientId === client.id) {
         // We were adding/editing a measurement from client detail view
@@ -1332,19 +1332,19 @@ function resetMeasurementForm(clearDraft = true) {
     updateMeasurementFields('');
     handleCustomGarmentVisibility('');
     handleAddFieldButtonVisibility('');
-    
+
     // Clear custom fields
     const customFieldsContainer = document.getElementById('custom-fields-container');
     if (customFieldsContainer) {
         customFieldsContainer.innerHTML = '';
     }
-    
+
     // Reset form header
     const header = document.querySelector('#new-measurement-screen h2');
     if (header) {
         header.textContent = 'New Measurement';
     }
-    
+
     // Initially hide all measurement fields
     const allFields = ['shoulder', 'chest', 'waist', 'sleeve', 'length', 'neck', 'hip', 'inseam', 'thigh', 'seat'];
     allFields.forEach(field => {
@@ -1353,7 +1353,7 @@ function resetMeasurementForm(clearDraft = true) {
             fieldElement.closest('.form-group').style.display = 'none';
         }
     });
-    
+
     // Clear draft when form is explicitly reset (unless explicitly told not to)
     if (clearDraft) {
         clearMeasurementDraft();
@@ -1370,14 +1370,14 @@ function setupMeasurementDraftAutoSave() {
         clearInterval(measurementDraftAutoSaveInterval);
         measurementDraftAutoSaveInterval = null;
     }
-    
+
     // Get all form inputs
     const formInputs = [
-        'client-name', 'phone-number', 'client-sex', 'garment-type', 
-        'custom-garment-name', 'shoulder', 'chest', 'waist', 'sleeve', 
+        'client-name', 'phone-number', 'client-sex', 'garment-type',
+        'custom-garment-name', 'shoulder', 'chest', 'waist', 'sleeve',
         'length', 'neck', 'hip', 'inseam', 'thigh', 'seat', 'notes'
     ];
-    
+
     // Add input/change listeners for auto-save
     formInputs.forEach(inputId => {
         const input = document.getElementById(inputId);
@@ -1390,12 +1390,12 @@ function setupMeasurementDraftAutoSave() {
                     saveMeasurementDraft();
                 }, 500); // Save 500ms after user stops typing
             };
-            
+
             input.addEventListener('input', saveHandler);
             input.addEventListener('change', saveHandler);
         }
     });
-    
+
     // Also save when custom fields change
     const customFieldsContainer = document.getElementById('custom-fields-container');
     if (customFieldsContainer) {
@@ -1407,13 +1407,13 @@ function setupMeasurementDraftAutoSave() {
             childList: true,
             subtree: true
         });
-        
+
         // Also listen to input events on custom fields
         customFieldsContainer.addEventListener('input', () => {
             saveMeasurementDraft();
         }, true);
     }
-    
+
     // Set up continuous periodic save (every 5 seconds) while on measurement screen
     // This ensures data is saved even if user doesn't type
     measurementDraftAutoSaveInterval = setInterval(() => {
@@ -1450,22 +1450,22 @@ async function requestWakeLock() {
     if (!isWakeLockSupported()) {
         return false;
     }
-    
+
     try {
         // Release any existing wake lock first
         if (wakeLock) {
             await releaseWakeLock();
         }
-        
+
         // Request wake lock
         wakeLock = await navigator.wakeLock.request('screen');
-        
+
         // Handle wake lock release (e.g., user manually locks screen)
         wakeLock.addEventListener('release', () => {
             console.log('Wake lock was released');
             wakeLock = null;
         });
-        
+
         return true;
     } catch (err) {
         // Fail gracefully - wake lock is optional
@@ -1480,7 +1480,7 @@ async function releaseWakeLock() {
     if (!wakeLock) {
         return;
     }
-    
+
     try {
         await wakeLock.release();
         wakeLock = null;
@@ -1525,32 +1525,32 @@ document.getElementById('add-measurement-from-details-btn').addEventListener('cl
         alert('Client not found');
         return;
     }
-    
+
     const clients = await getClients();
     if (!Array.isArray(clients)) return;
-    
+
     const client = clients.find(c => c.id === currentClientId);
-    
+
     if (!client) {
         alert('Client not found');
         return;
     }
-    
+
     // Clear any existing draft when starting new measurement for specific client
     clearMeasurementDraft();
-    
+
     // Reset form first
     resetMeasurementForm();
     currentClientId = client.id;
-    
+
     // Update form header
     document.querySelector('#new-measurement-screen h2').textContent = 'New Measurement';
-    
+
     // Pre-fill form with client data
     document.getElementById('client-name').value = client.name;
     document.getElementById('client-name').disabled = true;
     document.getElementById('phone-number').value = client.phone || '';
-    
+
     if (client.sex) {
         document.getElementById('client-sex').value = client.sex;
         document.getElementById('client-sex').disabled = true;
@@ -1562,7 +1562,7 @@ document.getElementById('add-measurement-from-details-btn').addEventListener('cl
         document.getElementById('client-sex').required = true;
         updateGarmentTypes('');
     }
-    
+
     // Show measurement form
     showScreen('new-measurement-screen');
     // Auto-save and wake lock are set up by showScreen function
@@ -1586,13 +1586,13 @@ document.getElementById('back-from-new-btn').addEventListener('click', async () 
             return; // User chose not to cancel
         }
     }
-    
+
     // Save draft before navigating away (in case user comes back)
     saveMeasurementDraft();
-    
+
     // Release wake lock when user cancels measurement
     deactivateMeasurementWakeLock();
-    
+
     if (currentClientId) {
         // If we were adding/editing from client detail view, return there
         const clientId = currentClientId;
@@ -1614,23 +1614,23 @@ document.getElementById('back-from-new-btn').addEventListener('click', async () 
 async function searchClients(query) {
     const clients = await getClients();
     const measurements = await getMeasurements();
-    
+
     if (!Array.isArray(clients)) return [];
     if (!Array.isArray(measurements)) return [];
-    
+
     const queryLower = query.toLowerCase().trim();
-    
+
     if (!queryLower) {
         return [];
     }
-    
+
     // Filter clients by name or phone
     const matchingClients = clients.filter(client => {
         const nameMatch = client.name.toLowerCase().includes(queryLower);
         const phoneMatch = client.phone && client.phone.includes(queryLower);
         return nameMatch || phoneMatch;
     });
-    
+
     // Add measurement count to each client
     return matchingClients.map(client => {
         const clientMeasurements = measurements.filter(m => m.client_id === client.id);
@@ -1644,22 +1644,22 @@ async function searchClients(query) {
 async function renderSearchResults(query) {
     const resultsContainer = document.getElementById('search-results');
     const clients = await searchClients(query);
-    
+
     if (!Array.isArray(clients)) {
         resultsContainer.innerHTML = '<div class="no-results">Error loading clients</div>';
         return;
     }
-    
+
     if (!query.trim()) {
         resultsContainer.innerHTML = '<div class="no-results">Start typing to search for clients...</div>';
         return;
     }
-    
+
     if (clients.length === 0) {
         resultsContainer.innerHTML = '<div class="no-results">No clients found</div>';
         return;
     }
-    
+
     resultsContainer.innerHTML = clients.map(client => `
         <div class="client-card" data-client-id="${client.id}">
             <div class="client-name">${escapeHtml(client.name)}</div>
@@ -1669,7 +1669,7 @@ async function renderSearchResults(query) {
             </div>
         </div>
     `).join('');
-    
+
     // Add click listeners to client cards
     resultsContainer.querySelectorAll('.client-card').forEach(card => {
         card.addEventListener('click', async () => {
@@ -1690,26 +1690,26 @@ async function showClientDetails(clientId, fromScreen = 'search-screen') {
     currentClientId = clientId;
     const clients = await getClients();
     const measurements = await getMeasurements();
-    
+
     if (!Array.isArray(clients)) return;
     if (!Array.isArray(measurements)) return;
-    
+
     const client = clients.find(c => c.id === clientId);
     if (!client) {
         alert('Client not found');
         return;
     }
-    
+
     const clientMeasurements = measurements
         .filter(m => m.client_id === clientId)
         .sort((a, b) => new Date(b.date_created) - new Date(a.date_created));
-    
+
     // Set client name in header
     document.getElementById('client-details-name').textContent = client.name;
-    
+
     // Render client details
     const detailsContainer = document.getElementById('client-details-content');
-    
+
     // Always show client info (name, phone, sex)
     let html = `
         <div class="client-info">
@@ -1731,7 +1731,7 @@ async function showClientDetails(clientId, fromScreen = 'search-screen') {
             ` : ''}
         </div>
     `;
-    
+
     if (clientMeasurements.length === 0) {
         html += `
             <div class="empty-state" style="margin-top: 30px;">
@@ -1781,10 +1781,10 @@ async function showClientDetails(clientId, fromScreen = 'search-screen') {
         });
         html += '</div>';
     }
-    
+
     detailsContainer.innerHTML = html;
     showScreen('client-details-screen');
-    
+
     // Add event listeners for measurement menu buttons
     detailsContainer.querySelectorAll('.measurement-menu-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -1794,7 +1794,7 @@ async function showClientDetails(clientId, fromScreen = 'search-screen') {
             toggleMenuDropdown(dropdown);
         });
     });
-    
+
     // Add event listeners for Edit measurement
     detailsContainer.querySelectorAll('.edit-measurement-btn').forEach(btn => {
         btn.addEventListener('click', async (e) => {
@@ -1804,7 +1804,7 @@ async function showClientDetails(clientId, fromScreen = 'search-screen') {
             await editMeasurement(measurementId, clientId);
         });
     });
-    
+
     // Add event listeners for Delete measurement
     detailsContainer.querySelectorAll('.delete-measurement-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -1819,11 +1819,11 @@ async function showClientDetails(clientId, fromScreen = 'search-screen') {
 // Group measurements by date
 function groupMeasurementsByDate(measurements) {
     const groups = {};
-    
+
     measurements.forEach(measurement => {
         const date = new Date(measurement.date_created);
         const dateKey = date.toDateString();
-        
+
         if (!groups[dateKey]) {
             groups[dateKey] = {
                 date: measurement.date_created,
@@ -1838,7 +1838,7 @@ function groupMeasurementsByDate(measurements) {
             };
         }
     });
-    
+
     return Object.values(groups);
 }
 
@@ -1860,7 +1860,7 @@ function renderCustomFields(customFields) {
     if (!customFields || typeof customFields !== 'object' || Object.keys(customFields).length === 0) {
         return '';
     }
-    
+
     return Object.entries(customFields).map(([name, value]) => {
         if (value === null || value === undefined || value === '') {
             return '';
@@ -1879,9 +1879,9 @@ function renderCustomFields(customFields) {
 // Format date
 function formatDate(dateString) {
     const date = new Date(dateString);
-    const options = { 
-        year: 'numeric', 
-        month: 'long', 
+    const options = {
+        year: 'numeric',
+        month: 'long',
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit'
@@ -1900,17 +1900,17 @@ function escapeHtml(text) {
 async function getRecentMeasurements(limit = null, offset = 0) {
     const measurements = await getMeasurements();
     const clients = await getClients();
-    
+
     if (!Array.isArray(measurements)) return { measurements: [], total: 0, hasMore: false };
     if (!Array.isArray(clients)) return { measurements: [], total: 0, hasMore: false };
-    
+
     // Sort by date, most recent first
     const sorted = measurements
         .sort((a, b) => new Date(b.date_created) - new Date(a.date_created));
-    
+
     // Apply pagination if limit is specified
     const paginated = limit ? sorted.slice(offset, offset + limit) : sorted.slice(offset);
-    
+
     // Map to include client info
     return {
         measurements: paginated.map(measurement => {
@@ -1939,12 +1939,12 @@ async function renderRecentMeasurements(resetPagination = true) {
     }
     const limit = recentMeasurementsExpanded ? 15 : recentMeasurementsLimit;
     const result = await getRecentMeasurements(limit, recentMeasurementsOffset);
-    
+
     if (result.measurements.length === 0) {
         container.innerHTML = '<div class="recent-empty">No measurements yet. Start by adding a new measurement.</div>';
         return;
     }
-    
+
     let html = result.measurements.map(item => `
         <div class="recent-item" data-measurement-id="${item.id}" data-client-id="${item.clientId}">
             <div class="recent-item-field">
@@ -1961,35 +1961,35 @@ async function renderRecentMeasurements(resetPagination = true) {
             </div>
         </div>
     `).join('');
-    
+
     container.innerHTML = html;
-    
+
     // Update header control (See More / Collapse button)
     const controlContainer = document.getElementById('recent-measurements-control');
     if (controlContainer) {
         let controlHtml = '';
-    
-    // Add "See More" button if not expanded and there are more measurements
-    if (!recentMeasurementsExpanded && result.hasMore) {
+
+        // Add "See More" button if not expanded and there are more measurements
+        if (!recentMeasurementsExpanded && result.hasMore) {
             controlHtml = `
                 <button id="see-more-measurements-btn" class="recent-control-btn">
                     See more
             </button>
         `;
-    }
-    
-    // Add "Collapse" button if expanded
-    if (recentMeasurementsExpanded) {
+        }
+
+        // Add "Collapse" button if expanded
+        if (recentMeasurementsExpanded) {
             controlHtml = `
                 <button id="collapse-measurements-btn" class="recent-control-btn">
                 Collapse
             </button>
         `;
-    }
-    
+        }
+
         controlContainer.innerHTML = controlHtml;
     }
-    
+
     // Add "Next" button at bottom if expanded and there are more measurements (for pagination)
     if (recentMeasurementsExpanded && result.hasMore) {
         const nextBtnHtml = `
@@ -1999,7 +1999,7 @@ async function renderRecentMeasurements(resetPagination = true) {
         `;
         container.innerHTML += nextBtnHtml;
     }
-    
+
     // Add click listeners for measurement items - open Measurement Detail View
     container.querySelectorAll('.recent-item').forEach(item => {
         item.addEventListener('click', async () => {
@@ -2007,7 +2007,7 @@ async function renderRecentMeasurements(resetPagination = true) {
             await showMeasurementDetail(measurementId);
         });
     });
-    
+
     // Add "See More" button listener
     const seeMoreBtn = document.getElementById('see-more-measurements-btn');
     if (seeMoreBtn) {
@@ -2017,7 +2017,7 @@ async function renderRecentMeasurements(resetPagination = true) {
             renderRecentMeasurements();
         });
     }
-    
+
     // Add "Collapse" button listener
     const collapseBtn = document.getElementById('collapse-measurements-btn');
     if (collapseBtn) {
@@ -2028,7 +2028,7 @@ async function renderRecentMeasurements(resetPagination = true) {
             renderRecentMeasurements(true);
         });
     }
-    
+
     // Add "Next" button listener
     const nextBtn = document.getElementById('next-measurements-btn');
     if (nextBtn) {
@@ -2053,13 +2053,13 @@ async function renderRecentMeasurements(resetPagination = true) {
                         </div>
                     </div>
                 `).join('');
-                
+
                 // Remove the Next button temporarily
                 nextBtn.remove();
-                
+
                 // Add new items
                 container.insertAdjacentHTML('beforeend', nextItems);
-                
+
                 // Re-add Next button if there are more
                 if (nextResult.hasMore) {
                     container.insertAdjacentHTML('beforeend', `
@@ -2069,7 +2069,7 @@ async function renderRecentMeasurements(resetPagination = true) {
                     `);
                     document.getElementById('next-measurements-btn').addEventListener('click', arguments.callee);
                 }
-                
+
                 // Add click listeners to new items - open Measurement Detail View
                 container.querySelectorAll('.recent-item').forEach(item => {
                     if (!item.hasAttribute('data-listener-added')) {
@@ -2091,7 +2091,7 @@ function formatDateShort(dateString) {
     const now = new Date();
     const diffTime = Math.abs(now - date);
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    
+
     if (diffDays === 1) {
         return 'Today';
     } else if (diffDays === 2) {
@@ -2109,7 +2109,7 @@ async function renderClientsList() {
     const countElement = document.getElementById('clients-count');
     const clients = await getClients();
     const measurements = await getMeasurements();
-    
+
     if (!Array.isArray(clients)) {
         container.innerHTML = '<div class="clients-empty">Error loading clients</div>';
         return;
@@ -2118,20 +2118,20 @@ async function renderClientsList() {
         container.innerHTML = '<div class="clients-empty">Error loading measurements</div>';
         return;
     }
-    
+
     // Update count
     countElement.textContent = `Clients: ${clients.length}`;
-    
+
     if (clients.length === 0) {
         container.innerHTML = '<div class="clients-empty">No clients yet. Start by adding a new measurement.</div>';
         return;
     }
-    
+
     // Sort clients alphabetically by name
-    const sortedClients = [...clients].sort((a, b) => 
+    const sortedClients = [...clients].sort((a, b) =>
         a.name.toLowerCase().localeCompare(b.name.toLowerCase())
     );
-    
+
     container.innerHTML = sortedClients.map(client => {
         const clientMeasurements = measurements.filter(m => m.client_id === client.id);
         return `
@@ -2149,7 +2149,7 @@ async function renderClientsList() {
             </div>
         `;
     }).join('');
-    
+
     // Add click listeners for client content (to view details)
     container.querySelectorAll('.client-list-item-content').forEach(content => {
         content.addEventListener('click', async () => {
@@ -2157,17 +2157,17 @@ async function renderClientsList() {
             await showClientDetails(clientId, 'clients-screen');
         });
     });
-    
+
     // Add click listeners for menu buttons
     container.querySelectorAll('.client-list-menu-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
             const clientId = btn.getAttribute('data-client-id');
             const dropdown = container.querySelector(`.client-list-dropdown[data-client-id="${clientId}"]`);
-            
+
             // Close all other dropdowns first
             closeAllMenuDropdowns();
-            
+
             // Toggle this dropdown with proper positioning
             if (!dropdown.classList.contains('active')) {
                 positionDropdown(btn, dropdown);
@@ -2175,7 +2175,7 @@ async function renderClientsList() {
             }
         });
     });
-    
+
     // Add click listeners for Edit Client in list
     container.querySelectorAll('.edit-client-list-btn').forEach(btn => {
         btn.addEventListener('click', async (e) => {
@@ -2185,7 +2185,7 @@ async function renderClientsList() {
             await editClientFromList(clientId);
         });
     });
-    
+
     // Add click listeners for Delete Client in list
     container.querySelectorAll('.delete-client-list-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
@@ -2204,22 +2204,22 @@ async function editClientFromList(clientId) {
         alert('Error loading clients');
         return;
     }
-    
+
     const client = clients.find(c => c.id === clientId);
-    
+
     if (!client) {
         alert('Client not found');
         return;
     }
-    
+
     currentClientId = clientId;
     previousScreen = 'clients-screen';
-    
+
     // Pre-fill edit form
     document.getElementById('edit-client-name').value = client.name;
     document.getElementById('edit-client-phone').value = client.phone || '';
     document.getElementById('edit-client-sex').value = client.sex || '';
-    
+
     showScreen('edit-client-screen');
 }
 
@@ -2228,9 +2228,9 @@ async function deleteClientFromList(clientId) {
     if (!confirm('Are you sure you want to delete this client? This will also delete all associated measurements.')) {
         return;
     }
-    
+
     deleteClient(clientId);
-    
+
     // Refresh the clients list
     await renderClientsList();
 }
@@ -2239,85 +2239,131 @@ async function deleteClientFromList(clientId) {
 let currentMeasurementDetailId = null;
 
 async function showMeasurementDetail(measurementId) {
-    const measurements = await getMeasurements();
-    const clients = await getClients();
-    
-    if (!Array.isArray(measurements)) {
-        alert('Error loading measurements');
-        return;
-    }
-    if (!Array.isArray(clients)) {
-        alert('Error loading clients');
-        return;
-    }
-    
-    const measurement = measurements.find(m => m.id === measurementId);
-    
-    if (!measurement) {
-        alert('Measurement not found');
-        return;
-    }
-    
-    const client = clients.find(c => c.id === measurement.client_id);
-    if (!client) {
-        alert('Client not found');
-        return;
-    }
-    
-    currentMeasurementDetailId = measurementId;
-    currentClientId = client.id;
-    
-    const detailsContainer = document.getElementById('measurement-detail-content');
-    
-    // Build HTML with client info and measurement details
-    let html = `
-        <div class="client-info">
-            <div class="client-info-item">
-                <span class="client-info-label">Client Name:</span>
-                <span>${escapeHtml(client.name)}</span>
-            </div>
-            ${client.phone ? `
+    // Show loading spinner
+    const loadingScreen = document.getElementById('app-loading-screen');
+    if (loadingScreen) loadingScreen.style.display = 'flex';
+
+    try {
+        const supabase = getSupabase();
+        if (!supabase) throw new Error('Supabase client not initialized');
+
+        // Optimize: Fetch ONLY the specific measurement
+        const { data: mData, error: mError } = await supabase
+            .from('measurements')
+            .select('*')
+            .eq('id', measurementId)
+            .single();
+
+        if (mError || !mData) {
+            console.error('Error fetching measurement:', mError);
+            alert('Measurement not found');
+            if (loadingScreen) loadingScreen.style.display = 'none';
+            return;
+        }
+
+        // Optimize: Fetch ONLY the specific client
+        const { data: cData, error: cError } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('id', mData.client_id)
+            .single();
+
+        if (cError || !cData) {
+            console.error('Error fetching client:', cError);
+            alert('Client not found associated with this measurement');
+            if (loadingScreen) loadingScreen.style.display = 'none';
+            return;
+        }
+
+        // Normalize measurement data
+        const measurement = {
+            id: mData.id,
+            client_id: mData.client_id,
+            garment_type: mData.garment_type || null,
+            date_created: mData.created_at,
+            shoulder: mData.shoulder || null,
+            chest: mData.chest || null,
+            waist: mData.waist || null,
+            sleeve: mData.sleeve || null,
+            length: mData.length || null,
+            neck: mData.neck || null,
+            hip: mData.hip || null,
+            inseam: mData.inseam || null,
+            thigh: mData.thigh || null,
+            seat: mData.seat || null,
+            notes: mData.notes || null,
+            customFields: mData.custom_fields || {}
+        };
+
+        // Normalize client data
+        const client = {
+            id: cData.id,
+            name: cData.name,
+            phone: cData.phone || '',
+            sex: cData.sex || ''
+        };
+
+        currentMeasurementDetailId = measurementId;
+        currentClientId = client.id;
+
+        const detailsContainer = document.getElementById('measurement-detail-content');
+
+        // Build HTML with client info and measurement details
+        let html = `
+            <div class="client-info">
                 <div class="client-info-item">
-                    <span class="client-info-label">Phone:</span>
-                    <span>${escapeHtml(client.phone)}</span>
+                    <span class="client-info-label">Client Name:</span>
+                    <span>${escapeHtml(client.name)}</span>
                 </div>
-            ` : ''}
-            ${client.sex ? `
-                <div class="client-info-item">
-                    <span class="client-info-label">Sex:</span>
-                    <span>${escapeHtml(client.sex)}</span>
-                </div>
-            ` : ''}
-        </div>
-        
-        <div class="measurement-record" style="margin-top: 30px;">
-            <div class="measurement-record-header">
-                <div class="measurement-garment">${measurement.garment_type || 'No garment type'}</div>
-                <div class="measurement-date">${formatDate(measurement.date_created)}</div>
+                ${client.phone ? `
+                    <div class="client-info-item">
+                        <span class="client-info-label">Phone:</span>
+                        <span>${escapeHtml(client.phone)}</span>
+                    </div>
+                ` : ''}
+                ${client.sex ? `
+                    <div class="client-info-item">
+                        <span class="client-info-label">Sex:</span>
+                        <span>${escapeHtml(client.sex)}</span>
+                    </div>
+                ` : ''}
             </div>
-            <div class="measurement-values">
-                ${renderMeasurementValue('Shoulder', measurement.shoulder)}
-                ${renderMeasurementValue('Chest', measurement.chest)}
-                ${renderMeasurementValue('Waist', measurement.waist)}
-                ${renderMeasurementValue('Sleeve', measurement.sleeve)}
-                ${renderMeasurementValue('Length', measurement.length)}
-                ${renderMeasurementValue('Neck', measurement.neck)}
-                ${renderMeasurementValue('Hip', measurement.hip)}
-                ${renderMeasurementValue('Inseam', measurement.inseam)}
-                ${renderMeasurementValue('Thigh', measurement.thigh)}
-                ${renderMeasurementValue('Seat', measurement.seat)}
-                ${renderCustomFields(measurement.customFields)}
-            </div>
-            ${measurement.notes ? `
-                <div class="measurement-notes" style="margin-top: 12px;">
-                    <strong>Notes:</strong> ${escapeHtml(measurement.notes)}
+            
+            <div class="measurement-record" style="margin-top: 30px;">
+                <div class="measurement-record-header">
+                    <div class="measurement-garment">${measurement.garment_type || 'No garment type'}</div>
+                    <div class="measurement-date">${formatDate(measurement.date_created)}</div>
                 </div>
-            ` : ''}
-        </div>
-    `;
-    
-    detailsContainer.innerHTML = html;
-    showScreen('measurement-detail-screen');
+                <div class="measurement-values">
+                    ${renderMeasurementValue('Shoulder', measurement.shoulder)}
+                    ${renderMeasurementValue('Chest', measurement.chest)}
+                    ${renderMeasurementValue('Waist', measurement.waist)}
+                    ${renderMeasurementValue('Sleeve', measurement.sleeve)}
+                    ${renderMeasurementValue('Length', measurement.length)}
+                    ${renderMeasurementValue('Neck', measurement.neck)}
+                    ${renderMeasurementValue('Hip', measurement.hip)}
+                    ${renderMeasurementValue('Inseam', measurement.inseam)}
+                    ${renderMeasurementValue('Thigh', measurement.thigh)}
+                    ${renderMeasurementValue('Seat', measurement.seat)}
+                    ${renderCustomFields(measurement.customFields)}
+                </div>
+                ${measurement.notes ? `
+                    <div class="measurement-notes" style="margin-top: 12px;">
+                        <strong>Notes:</strong> ${escapeHtml(measurement.notes)}
+                    </div>
+                ` : ''}
+            </div>
+        `;
+
+        detailsContainer.innerHTML = html;
+        showScreen('measurement-detail-screen');
+
+    } catch (err) {
+        console.error('Error showing details:', err);
+        alert('An error occurred while loading details');
+    } finally {
+        if (loadingScreen) loadingScreen.style.display = 'none';
+    }
 }
 
 // Back button from Measurement Detail View
@@ -2336,18 +2382,18 @@ document.getElementById('view-client-from-measurement-btn').addEventListener('cl
 // Toggle menu dropdown
 function toggleMenuDropdown(dropdownElement) {
     if (!dropdownElement) return;
-    
+
     closeAllMenuDropdowns(dropdownElement); // Close others
-    
+
     // Find the associated button
     const measurementId = dropdownElement.getAttribute('data-measurement-id');
     const button = document.querySelector(`.measurement-menu-btn[data-measurement-id="${measurementId}"]`) ||
-                   dropdownElement.previousElementSibling;
-    
+        dropdownElement.previousElementSibling;
+
     if (button) {
         positionDropdown(button, dropdownElement);
     }
-    
+
     dropdownElement.classList.toggle('active');
 }
 
@@ -2368,16 +2414,16 @@ function positionDropdown(button, dropdown) {
     const rect = button.getBoundingClientRect();
     const dropdownHeight = 100; // Approximate height
     const viewportHeight = window.innerHeight;
-    
+
     // Position below the button by default
     let top = rect.bottom + 4;
-    
+
     // If dropdown would go below viewport, position above
     if (top + dropdownHeight > viewportHeight) {
         top = rect.top - dropdownHeight - 4;
         if (top < 0) top = rect.bottom + 4; // Fallback to below if not enough space above
     }
-    
+
     dropdown.style.top = top + 'px';
     dropdown.style.right = (window.innerWidth - rect.right) + 'px';
     dropdown.style.left = 'auto';
@@ -2388,14 +2434,14 @@ document.getElementById('client-menu-btn').addEventListener('click', (e) => {
     e.stopPropagation();
     const button = e.currentTarget;
     const dropdown = document.getElementById('client-menu-dropdown');
-    
+
     // Close other dropdowns first
     document.querySelectorAll('.menu-dropdown.active').forEach(d => {
         if (d !== dropdown) {
             d.classList.remove('active');
         }
     });
-    
+
     if (dropdown.classList.contains('active')) {
         dropdown.classList.remove('active');
     } else {
@@ -2406,8 +2452,8 @@ document.getElementById('client-menu-btn').addEventListener('click', (e) => {
 
 // Close dropdowns when clicking outside
 document.addEventListener('click', (e) => {
-    if (!e.target.closest('.client-menu-wrapper') && 
-        !e.target.closest('.measurement-menu-wrapper') && 
+    if (!e.target.closest('.client-menu-wrapper') &&
+        !e.target.closest('.measurement-menu-wrapper') &&
         !e.target.closest('.btn-menu')) {
         closeAllMenuDropdowns();
     }
@@ -2440,18 +2486,18 @@ function setTheme(theme) {
 function updateThemeToggleIcon(theme) {
     // Moon icon SVG (for dark mode - clicking switches to light)
     const moonIcon = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>`;
-    
+
     // Sun icon SVG (for light mode - clicking switches to dark)
     const sunIcon = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>`;
-    
+
     const icon = theme === 'dark' ? moonIcon : sunIcon;
-    
+
     // Update button with ID
     const themeToggleBtn = document.getElementById('theme-toggle-btn');
     if (themeToggleBtn) {
         themeToggleBtn.innerHTML = icon;
     }
-    
+
     // Update all navbar theme toggle buttons
     document.querySelectorAll('.btn-theme-toggle').forEach(btn => {
         btn.innerHTML = icon;
@@ -2470,14 +2516,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // Ensure theme is set (default to dark)
     const savedTheme = localStorage.getItem(THEME_STORAGE_KEY) || 'dark';
     setTheme(savedTheme);
-    
+
     // Find theme toggle button in active screen or home screen
     const activeScreen = document.querySelector('.screen.active') || document.getElementById('home-screen');
     const themeToggleBtn = activeScreen ? activeScreen.querySelector('.btn-theme-toggle') || document.getElementById('theme-toggle-btn') : document.getElementById('theme-toggle-btn');
     if (themeToggleBtn) {
         themeToggleBtn.addEventListener('click', toggleTheme);
     }
-    
+
     // Also add listeners to all theme toggle buttons for consistency
     document.querySelectorAll('.btn-theme-toggle').forEach(btn => {
         if (!btn.hasAttribute('data-listener-added')) {
@@ -2490,48 +2536,48 @@ document.addEventListener('DOMContentLoaded', () => {
 // Edit Client functionality
 document.getElementById('edit-client-btn').addEventListener('click', async () => {
     closeAllMenuDropdowns();
-    
+
     if (!currentClientId) {
         alert('Client not found');
         return;
     }
-    
+
     const clients = await getClients();
     if (!Array.isArray(clients)) {
         alert('Error loading clients');
         return;
     }
-    
+
     const client = clients.find(c => c.id === currentClientId);
-    
+
     if (!client) {
         alert('Client not found');
         return;
     }
-    
+
     // Pre-fill edit form
     document.getElementById('edit-client-name').value = client.name;
     document.getElementById('edit-client-phone').value = client.phone || '';
     document.getElementById('edit-client-sex').value = client.sex || '';
-    
+
     showScreen('edit-client-screen');
 });
 
 // Delete Client functionality
 document.getElementById('delete-client-btn').addEventListener('click', async () => {
     closeAllMenuDropdowns();
-    
+
     if (!currentClientId) {
         alert('Client not found');
         return;
     }
-    
+
     if (!confirm('Are you sure you want to delete this client? This will also delete all associated measurements.')) {
         return;
     }
-    
+
     deleteClient(currentClientId);
-    
+
     // Return to Clients Screen
     showScreen('clients-screen');
     await renderClientsList();
@@ -2540,28 +2586,28 @@ document.getElementById('delete-client-btn').addEventListener('click', async () 
 // Edit Client Form Submission
 document.getElementById('edit-client-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    
+
     if (!currentClientId) {
         alert('Client not found');
         return;
     }
-    
+
     const name = document.getElementById('edit-client-name').value.trim();
     const phone = document.getElementById('edit-client-phone').value.trim();
     const sex = document.getElementById('edit-client-sex').value;
-    
+
     if (!name) {
         alert('Client name is required');
         return;
     }
-    
+
     if (!sex) {
         alert('Sex is required');
         return;
     }
-    
+
     await updateClient(currentClientId, name, phone, sex);
-    
+
     // Return to Client Detail View
     await showClientDetails(currentClientId, previousScreen);
 });
@@ -2578,37 +2624,37 @@ document.getElementById('back-from-edit-client-btn').addEventListener('click', a
 // Business Setup Form Submission
 document.getElementById('business-setup-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    
+
     const name = document.getElementById('business-name').value.trim();
     const email = document.getElementById('business-email').value.trim();
     const phone = document.getElementById('business-phone').value.trim();
-    
+
     if (!name) {
         alert('Business name is required');
         return;
     }
-    
+
     if (!phone) {
         alert('Business phone is required');
         return;
     }
-    
+
     // Email is optional - no validation needed
-    
+
     // Clear any existing business session before starting registration
     // This ensures old businesses don't override new registrations
     localStorage.removeItem(CURRENT_BUSINESS_ID_KEY);
     localStorage.removeItem(LOGOUT_STATE_KEY);
-    
+
     // First, check if a business with these credentials already exists
     // Pass empty string if email is not provided
     const existingBusiness = await findBusinessByCredentials(name, email || '', phone);
-    
+
     if (existingBusiness) {
         // Business exists - ID is already stored in findBusinessByCredentials
         // Log them in
         loginBusiness();
-        
+
         // Update header and show home screen
         await updateBusinessHeader();
         await updateNavbarBusinessName();
@@ -2617,20 +2663,20 @@ document.getElementById('business-setup-form').addEventListener('submit', async 
     } else {
         // Business doesn't exist - create new business
         // Business ID will be stored in createBusiness function
-    const business = await createBusiness(name, email, phone);
-    if (!business) {
-        alert('Error creating business. Please check the browser console (F12) for details.');
-        return;
-    }
-        
+        const business = await createBusiness(name, email, phone);
+        if (!business) {
+            alert('Error creating business. Please check the browser console (F12) for details.');
+            return;
+        }
+
         // Log the user in after creating business (clears logout state)
         loginBusiness();
-    
-    // Update header and show home screen
-    await updateBusinessHeader();
+
+        // Update header and show home screen
+        await updateBusinessHeader();
         await updateNavbarBusinessName();
-    showScreen('home-screen');
-    await renderRecentMeasurements();
+        showScreen('home-screen');
+        await renderRecentMeasurements();
     }
 });
 
@@ -2640,7 +2686,7 @@ async function handleSettingsClick() {
     // Display business info
     const business = await getBusiness();
     const infoContainer = document.getElementById('business-info-display');
-    
+
     if (business) {
         infoContainer.innerHTML = `
             <div class="business-info-item">
@@ -2657,12 +2703,12 @@ async function handleSettingsClick() {
             </div>
         `;
     }
-    
+
     // Render email linking status (function defined in public/app.js)
     if (typeof renderEmailLinkingStatus === 'function') {
         await renderEmailLinkingStatus();
     }
-    
+
     showScreen('settings-screen');
 }
 
@@ -2705,28 +2751,28 @@ document.getElementById('back-from-edit-business-btn').addEventListener('click',
 // Edit Business Form Submission
 document.getElementById('edit-business-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    
+
     const name = document.getElementById('edit-business-name').value.trim();
     const email = document.getElementById('edit-business-email').value.trim();
     const phone = document.getElementById('edit-business-phone').value.trim();
-    
+
     if (!name) {
         alert('Business name is required');
         return;
     }
-    
+
     if (!phone) {
         alert('Business phone is required');
         return;
     }
-    
+
     // Email is optional - no validation needed
-    
+
     await updateBusiness(name, email, phone);
-    
+
     // Update header
     await updateBusinessHeader();
-    
+
     // Update the display in settings
     const infoContainer = document.getElementById('business-info-display');
     infoContainer.innerHTML = `
@@ -2743,7 +2789,7 @@ document.getElementById('edit-business-form').addEventListener('submit', async (
             <span>${escapeHtml(phone)}</span>
         </div>
     `;
-    
+
     showScreen('settings-screen');
 });
 
@@ -2752,10 +2798,10 @@ document.getElementById('logout-btn').addEventListener('click', () => {
     if (!confirm('Are you sure you want to logout? Your data will be preserved.')) {
         return;
     }
-    
+
     // Clear all business session data
     logoutBusiness();
-    
+
     // Show business setup screen (registration screen) after logout
     showScreen('business-setup-screen');
 });
@@ -2763,16 +2809,16 @@ document.getElementById('logout-btn').addEventListener('click', () => {
 // Business Login Form Submission
 document.getElementById('business-login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    
+
     const name = document.getElementById('login-business-name').value.trim();
     const email = document.getElementById('login-business-email').value.trim();
     const phone = document.getElementById('login-business-phone').value.trim();
-    
+
     if (!name || !phone) {
         alert('Business name and phone are required');
         return;
     }
-    
+
     // Email is optional - pass empty string if not provided
     // Check if credentials match
     if (await matchBusiness(name, email || '', phone)) {
@@ -2790,18 +2836,18 @@ document.getElementById('reset-business-btn').addEventListener('click', () => {
     if (!confirm('Are you sure you want to RESET? This will permanently DELETE ALL your data including business info, clients, and measurements. This action cannot be undone.')) {
         return;
     }
-    
+
     // Double confirmation for safety
     if (!confirm('This is your last chance! All data will be permanently deleted. Continue?')) {
         return;
     }
-    
+
     // Reset everything
     resetBusiness();
-    
+
     // Clear the setup form
     document.getElementById('business-setup-form').reset();
-    
+
     // Show business setup screen
     showScreen('business-setup-screen');
 });
@@ -2834,40 +2880,40 @@ function showAddFieldModal() {
             </div>
         </div>
     `;
-    
+
     document.body.appendChild(modal);
-    
+
     // Focus on the name input
     setTimeout(() => {
         document.getElementById('new-field-name').focus();
     }, 100);
-    
+
     // Cancel button
     document.getElementById('cancel-add-field-btn').addEventListener('click', () => {
         closeAddFieldModal();
     });
-    
+
     // Add button
     document.getElementById('confirm-add-field-btn').addEventListener('click', () => {
         const fieldName = document.getElementById('new-field-name').value.trim();
         const fieldValue = document.getElementById('new-field-value').value;
-        
+
         if (!fieldName) {
             alert('Please enter a field name');
             return;
         }
-        
+
         addCustomFieldInline(fieldName, fieldValue);
         closeAddFieldModal();
     });
-    
+
     // Close on overlay click
     modal.addEventListener('click', (e) => {
         if (e.target === modal) {
             closeAddFieldModal();
         }
     });
-    
+
     // Close on Enter key in value field
     document.getElementById('new-field-value').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
@@ -2889,15 +2935,15 @@ function closeAddFieldModal() {
 function addCustomFieldInline(fieldName, fieldValue = '') {
     const container = document.getElementById('custom-fields-container');
     const fieldId = 'custom-' + Date.now().toString();
-    
+
     // Create a form group that looks exactly like predefined fields
     const formGroup = document.createElement('div');
     formGroup.className = 'form-group custom-field-group';
     formGroup.setAttribute('data-field-id', fieldId);
-    
+
     // Capitalize the field name for display
     const displayName = fieldName.charAt(0).toUpperCase() + fieldName.slice(1);
-    
+
     formGroup.innerHTML = `
         <label>
             <span>${escapeHtml(displayName)}</span>
@@ -2911,20 +2957,20 @@ function addCustomFieldInline(fieldName, fieldValue = '') {
                value="${fieldValue}"
                autocomplete="off">
     `;
-    
+
     container.appendChild(formGroup);
-    
+
     // Add animation class for fade-in effect
     formGroup.classList.add('field-new');
     setTimeout(() => {
         formGroup.classList.remove('field-new');
     }, 150);
-    
+
     // Add remove button listener
     formGroup.querySelector('.btn-remove-field').addEventListener('click', () => {
         formGroup.remove();
     });
-    
+
     // Focus on the value input
     formGroup.querySelector('input').focus();
 }
@@ -2942,26 +2988,26 @@ function saveMeasurementDraft() {
     try {
         const form = document.getElementById('measurement-form');
         if (!form) return;
-        
+
         // Get current active screen
         const activeScreen = document.querySelector('.screen.active');
         const currentScreenId = activeScreen ? activeScreen.id : null;
-        
+
         // Check if we're on the measurement screen
         const isOnMeasurementScreen = currentScreenId === 'new-measurement-screen';
-        
+
         // Only save if we're on the measurement screen
         if (!isOnMeasurementScreen) {
             // If we're not on measurement screen, don't save (but don't clear existing draft)
             return;
         }
-        
+
         // Collect all form data
         const draft = {
             // Screen state
             screenId: 'new-measurement-screen',
             timestamp: Date.now(),
-            
+
             // Form data
             clientName: document.getElementById('client-name')?.value || '',
             phone: document.getElementById('phone-number')?.value || '',
@@ -2986,7 +3032,7 @@ function saveMeasurementDraft() {
             // Save custom fields
             customFields: []
         };
-        
+
         // Collect custom fields
         const customFieldGroups = document.querySelectorAll('#custom-fields-container .custom-field-group');
         customFieldGroups.forEach(group => {
@@ -3002,7 +3048,7 @@ function saveMeasurementDraft() {
                 }
             }
         });
-        
+
         // Always save if we're on measurement screen (even if empty, to track active session)
         // This ensures we know there's an active measurement session
         localStorage.setItem(MEASUREMENT_DRAFT_KEY, JSON.stringify(draft));
@@ -3016,7 +3062,7 @@ function loadMeasurementDraft() {
     try {
         const draftJson = localStorage.getItem(MEASUREMENT_DRAFT_KEY);
         if (!draftJson) return null;
-        
+
         return JSON.parse(draftJson);
     } catch (err) {
         console.warn('Error loading measurement draft:', err);
@@ -3036,7 +3082,7 @@ function clearMeasurementDraft() {
 // Restore measurement draft to form
 function restoreMeasurementDraft(draft) {
     if (!draft) return false;
-    
+
     try {
         // Restore basic fields
         if (draft.clientName !== undefined) {
@@ -3046,12 +3092,12 @@ function restoreMeasurementDraft(draft) {
                 clientNameInput.disabled = draft.clientNameDisabled || false;
             }
         }
-        
+
         if (draft.phone !== undefined) {
             const phoneInput = document.getElementById('phone-number');
             if (phoneInput) phoneInput.value = draft.phone || '';
         }
-        
+
         if (draft.sex) {
             const sexSelect = document.getElementById('client-sex');
             if (sexSelect) {
@@ -3061,7 +3107,7 @@ function restoreMeasurementDraft(draft) {
                 updateGarmentTypes(draft.sex);
             }
         }
-        
+
         if (draft.garmentType) {
             const garmentSelect = document.getElementById('garment-type');
             if (garmentSelect) {
@@ -3078,7 +3124,7 @@ function restoreMeasurementDraft(draft) {
                 handleAddFieldButtonVisibility(draft.garmentType);
             }
         }
-        
+
         // Restore measurement fields
         const measurementFields = ['shoulder', 'chest', 'waist', 'sleeve', 'length', 'neck', 'hip', 'inseam', 'thigh', 'seat'];
         measurementFields.forEach(field => {
@@ -3087,13 +3133,13 @@ function restoreMeasurementDraft(draft) {
                 if (fieldInput) fieldInput.value = draft[field] || '';
             }
         });
-        
+
         // Restore notes
         if (draft.notes !== undefined) {
             const notesTextarea = document.getElementById('notes');
             if (notesTextarea) notesTextarea.value = draft.notes || '';
         }
-        
+
         // Restore custom fields
         if (draft.customFields && Array.isArray(draft.customFields)) {
             const customFieldsContainer = document.getElementById('custom-fields-container');
@@ -3106,7 +3152,7 @@ function restoreMeasurementDraft(draft) {
                 });
             }
         }
-        
+
         // Restore current IDs
         if (draft.currentClientId) {
             currentClientId = draft.currentClientId;
@@ -3116,11 +3162,11 @@ function restoreMeasurementDraft(draft) {
             const header = document.querySelector('#new-measurement-screen h2');
             if (header) header.textContent = 'Edit Measurement';
         }
-        
+
         // Update draft timestamp to prevent expiration
         draft.timestamp = Date.now();
         localStorage.setItem(MEASUREMENT_DRAFT_KEY, JSON.stringify(draft));
-        
+
         return true;
     } catch (err) {
         console.warn('Error restoring measurement draft:', err);
@@ -3132,7 +3178,7 @@ function restoreMeasurementDraft(draft) {
 async function checkAndRestoreDraft() {
     const draft = loadMeasurementDraft();
     if (!draft) return false;
-    
+
     // Only restore if we have a valid business session
     const hasBiz = await hasBusiness();
     if (!hasBiz || isUserLoggedOut()) {
@@ -3140,7 +3186,7 @@ async function checkAndRestoreDraft() {
         clearMeasurementDraft();
         return false;
     }
-    
+
     // Check if draft is recent (within last 7 days) to avoid restoring very old drafts
     const draftAge = Date.now() - (draft.timestamp || 0);
     const MAX_DRAFT_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -3149,7 +3195,7 @@ async function checkAndRestoreDraft() {
         clearMeasurementDraft();
         return false;
     }
-    
+
     // Restore the draft
     const restored = restoreMeasurementDraft(draft);
     if (restored) {
@@ -3160,7 +3206,7 @@ async function checkAndRestoreDraft() {
         // Wake lock will be activated by showScreen function
         return true;
     }
-    
+
     return false;
 }
 
@@ -3168,20 +3214,20 @@ async function checkAndRestoreDraft() {
 function hasActiveMeasurementSession() {
     const draft = loadMeasurementDraft();
     if (!draft) return false;
-    
+
     // Check if draft is recent (within last 7 days)
     const draftAge = Date.now() - (draft.timestamp || 0);
     const MAX_DRAFT_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
     if (draftAge > MAX_DRAFT_AGE) {
         return false;
     }
-    
+
     // Check if there's meaningful data
-    const hasData = draft.clientName || draft.phone || draft.sex || draft.garmentType || 
-                   draft.shoulder || draft.chest || draft.waist || draft.sleeve || 
-                   draft.length || draft.neck || draft.hip || draft.inseam || 
-                   draft.thigh || draft.seat || draft.notes || (draft.customFields && draft.customFields.length > 0);
-    
+    const hasData = draft.clientName || draft.phone || draft.sex || draft.garmentType ||
+        draft.shoulder || draft.chest || draft.waist || draft.sleeve ||
+        draft.length || draft.neck || draft.hip || draft.inseam ||
+        draft.thigh || draft.seat || draft.notes || (draft.customFields && draft.customFields.length > 0);
+
     return hasData;
 }
 
@@ -3189,7 +3235,7 @@ function hasActiveMeasurementSession() {
 function initializeApp() {
     // Initialize device ID early (must happen before any business checks)
     getDeviceId();
-    
+
     // Hide all measurement fields on page load
     const allFields = ['shoulder', 'chest', 'waist', 'sleeve', 'length', 'neck', 'hip', 'inseam', 'thigh', 'seat'];
     allFields.forEach(field => {
@@ -3201,35 +3247,35 @@ function initializeApp() {
             }
         }
     });
-    
+
     // Wait for Supabase to be initialized, then initialize storage
-    (async function() {
+    (async function () {
         // Wait for Supabase client to be ready (max 5 seconds)
         let attempts = 0;
         while (!window.supabaseClient && attempts < 50) {
             await new Promise(resolve => setTimeout(resolve, 100));
             attempts++;
         }
-        
+
         if (!window.supabaseClient) {
             console.error('Supabase client failed to initialize after 5 seconds');
             alert('Error: Unable to connect to Supabase. Please check your internet connection and environment variables.');
             return;
         }
-        
+
         // Initialize storage and show appropriate screen
         const appInitialized = await initStorage();
         if (appInitialized) {
             await updateBusinessHeader();
             await updateNavbarBusinessName();
-            
+
             // ALWAYS check for draft first - if it exists, restore it and DON'T show dashboard
             const draftRestored = await checkAndRestoreDraft();
             if (!draftRestored) {
                 // No active measurement session - show home screen (dashboard)
                 showScreen('home-screen');
                 await renderRecentMeasurements();
-                
+
                 // Reset measurement form if business exists (but don't clear draft if it exists)
                 resetMeasurementForm(false);
             } else {
