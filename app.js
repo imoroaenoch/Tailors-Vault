@@ -1686,32 +1686,51 @@ document.getElementById('search-input').addEventListener('input', async (e) => {
 
 // Show Client Details
 async function showClientDetails(clientId, fromScreen = 'search-screen') {
+    // Show loading spinner immediately
+    const loadingScreen = document.getElementById('app-loading-screen');
+    if (loadingScreen) loadingScreen.style.display = 'flex';
+
     previousScreen = fromScreen;
     currentClientId = clientId;
-    const clients = await getClients();
-    const measurements = await getMeasurements();
 
-    if (!Array.isArray(clients)) return;
-    if (!Array.isArray(measurements)) return;
+    try {
+        const supabase = getSupabase();
+        if (!supabase) throw new Error('Supabase client not initialized');
 
-    const client = clients.find(c => c.id === clientId);
-    if (!client) {
-        alert('Client not found');
-        return;
-    }
+        // Optimize: Fetch ONLY the specific client
+        const { data: client, error: clientError } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('id', clientId)
+            .single();
 
-    const clientMeasurements = measurements
-        .filter(m => m.client_id === clientId)
-        .sort((a, b) => new Date(b.date_created) - new Date(a.date_created));
+        if (clientError || !client) {
+            console.error('Error fetching client:', clientError);
+            alert('Client not found');
+            if (loadingScreen) loadingScreen.style.display = 'none';
+            return;
+        }
 
-    // Set client name in header
-    document.getElementById('client-details-name').textContent = client.name;
+        // Optimize: Fetch ONLY measurements for this client
+        const { data: clientMeasurements, error: measurementsError } = await supabase
+            .from('measurements')
+            .select('*')
+            .eq('client_id', clientId)
+            .order('created_at', { ascending: false });
 
-    // Render client details
-    const detailsContainer = document.getElementById('client-details-content');
+        if (measurementsError) {
+            console.error('Error fetching measurements:', measurementsError);
+            // Don't crash, just show no measurements
+        }
 
-    // Always show client info (name, phone, sex)
-    let html = `
+        // Set client name in header
+        document.getElementById('client-details-name').textContent = client.name;
+
+        // Render client details
+        const detailsContainer = document.getElementById('client-details-content');
+
+        // Always show client info (name, phone, sex)
+        let html = `
         <div class="client-info">
             <div class="client-info-item">
                 <span class="client-info-label">Name:</span>
@@ -1732,18 +1751,18 @@ async function showClientDetails(clientId, fromScreen = 'search-screen') {
         </div>
     `;
 
-    if (clientMeasurements.length === 0) {
-        html += `
+        if (clientMeasurements.length === 0) {
+            html += `
             <div class="empty-state" style="margin-top: 30px;">
                 <div class="empty-state-icon">📏</div>
                 <div class="empty-state-text">No measurements recorded yet</div>
             </div>
         `;
-    } else {
-        // Show all measurements as individual records (most recent first)
-        html += '<div class="measurements-list" style="margin-top: 30px;">';
-        clientMeasurements.forEach(measurement => {
-            html += `
+        } else {
+            // Show all measurements as individual records (most recent first)
+            html += '<div class="measurements-list" style="margin-top: 30px;">';
+            clientMeasurements.forEach(measurement => {
+                html += `
                 <div class="measurement-record">
                     <div class="measurement-record-header">
                         <div class="measurement-garment">${measurement.garment_type || 'No garment type'}</div>
@@ -1778,42 +1797,49 @@ async function showClientDetails(clientId, fromScreen = 'search-screen') {
                     ` : ''}
                 </div>
             `;
+            });
+            html += '</div>';
+        }
+
+        detailsContainer.innerHTML = html;
+        showScreen('client-details-screen');
+
+        // Add event listeners for measurement menu buttons
+        detailsContainer.querySelectorAll('.measurement-menu-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const measurementId = e.target.getAttribute('data-measurement-id');
+                const dropdown = detailsContainer.querySelector(`.measurement-menu-dropdown[data-measurement-id="${measurementId}"]`);
+                toggleMenuDropdown(dropdown);
+            });
         });
-        html += '</div>';
+
+        // Add event listeners for Edit measurement
+        detailsContainer.querySelectorAll('.edit-measurement-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const measurementId = e.target.getAttribute('data-measurement-id');
+                closeAllMenuDropdowns();
+                await editMeasurement(measurementId, clientId);
+            });
+        });
+
+        // Add event listeners for Delete measurement
+        detailsContainer.querySelectorAll('.delete-measurement-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const measurementId = e.target.getAttribute('data-measurement-id');
+                closeAllMenuDropdowns();
+                deleteMeasurement(measurementId, clientId);
+            });
+        });
+
+    } catch (err) {
+        console.error('Error loading client details:', err);
+        alert('An error occurred while loading client details.');
+    } finally {
+        if (loadingScreen) loadingScreen.style.display = 'none';
     }
-
-    detailsContainer.innerHTML = html;
-    showScreen('client-details-screen');
-
-    // Add event listeners for measurement menu buttons
-    detailsContainer.querySelectorAll('.measurement-menu-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const measurementId = e.target.getAttribute('data-measurement-id');
-            const dropdown = detailsContainer.querySelector(`.measurement-menu-dropdown[data-measurement-id="${measurementId}"]`);
-            toggleMenuDropdown(dropdown);
-        });
-    });
-
-    // Add event listeners for Edit measurement
-    detailsContainer.querySelectorAll('.edit-measurement-btn').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const measurementId = e.target.getAttribute('data-measurement-id');
-            closeAllMenuDropdowns();
-            await editMeasurement(measurementId, clientId);
-        });
-    });
-
-    // Add event listeners for Delete measurement
-    detailsContainer.querySelectorAll('.delete-measurement-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const measurementId = e.target.getAttribute('data-measurement-id');
-            closeAllMenuDropdowns();
-            deleteMeasurement(measurementId, clientId);
-        });
-    });
 }
 
 // Group measurements by date
