@@ -157,8 +157,13 @@ body {
 
 /* Compact screen padding (matching new-measurement-screen) */
 .screen {
+    display: none;
     padding-top: 0;
     padding-bottom: 32px;
+}
+
+.screen.active {
+    display: block;
 }
 
 /* New Measurement Form Container - Centered, not full width */
@@ -206,7 +211,7 @@ body {
 #new-measurement-screen select,
 #new-measurement-screen textarea {
     padding: 11px 14px;
-    font-size: 15px;
+    font-size: 16px;
 }
 
 #new-measurement-screen .measurements-section {
@@ -231,7 +236,7 @@ body {
 
 #new-measurement-screen .measurements-grid input[type="number"] {
     padding: 9px 12px;
-    font-size: 14px;
+    font-size: 16px;
 }
 
 #new-measurement-screen .measurements-grid label {

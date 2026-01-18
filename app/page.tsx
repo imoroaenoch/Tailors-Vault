@@ -55,7 +55,7 @@ export default function Home() {
           client.auth.onAuthStateChange((_event: any, session: any) => {
             if (session) {
               setCurrentScreen(prev => {
-                const needsRestoration = ['login-screen', 'signup-screen', 'forgot-password-screen', 'app-loading-screen']
+                const needsRestoration = ['welcome-screen', 'login-screen', 'signup-screen', 'forgot-password-screen', 'app-loading-screen']
                 if (needsRestoration.includes(prev)) {
                   const inProgressMeasurement = localStorage.getItem('measurement-in-progress')
                   if (inProgressMeasurement === 'true') {
@@ -85,6 +85,21 @@ export default function Home() {
     }
     checkAuth()
   }, [])
+
+  // Call renderRecentMeasurements when home screen becomes active
+  useEffect(() => {
+    if (currentScreen === 'home-screen') {
+      // Wait a bit for DOM to be ready
+      const timer = setTimeout(() => {
+        if (typeof (window as any).renderRecentMeasurements === 'function') {
+          (window as any).renderRecentMeasurements().catch((err: any) => {
+            console.error('[React] Error rendering recent measurements:', err)
+          })
+        }
+      }, 100)
+      return () => clearTimeout(timer)
+    }
+  }, [currentScreen])
 
   useEffect(() => {
     // Initialize theme early (before app.js loads) to prevent flash

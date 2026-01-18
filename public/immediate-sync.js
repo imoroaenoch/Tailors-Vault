@@ -131,7 +131,7 @@ async function syncMeasurementImmediately(measurement, userId, businessId, clien
 
         const measurementId = measurement.server_id || measurement.local_id;
 
-        const measurementData = {
+        const payload = {
             user_id: userId,
             business_id: businessId,
             client_id: clientId,
@@ -150,40 +150,19 @@ async function syncMeasurementImmediately(measurement, userId, businessId, clien
             custom_fields: measurement.custom_fields || {}
         };
 
-        let data, error;
-
-        // If the measurement already has a server_id and was synced, update it
-        if (measurement.synced && measurement.server_id) {
-            console.log('[ImmediateSync] Upserting existing measurement:', measurementId);
-            const updateResult = await supabase
-                .from('measurements')
-                .upsert({ id: measurement.server_id, ...measurementData })
-                .select()
-                .maybeSingle();
-            data = updateResult.data;
-            error = updateResult.error;
+        // Always use server_id if it exists to ensure we update the correct record
+        if (measurement.server_id) {
+            payload.id = measurement.server_id;
+            console.log('[ImmediateSync] Upserting measurement with ID:', measurement.server_id);
         } else {
-            // Brand new measurement or retry of unsynced insert
-            console.log('[ImmediateSync] Upserting new measurement');
-            const insertResult = await supabase
-                .from('measurements')
-                .upsert(measurementData) // id omitted
-                .select()
-                .maybeSingle();
-            data = insertResult.data;
-            error = insertResult.error;
-
-            if (error && error.code === '23505' && measurement.server_id) {
-                console.log('[ImmediateSync] Conflict detected on insert, retrying with ID');
-                const retryResult = await supabase
-                    .from('measurements')
-                    .upsert({ id: measurement.server_id, ...measurementData })
-                    .select()
-                    .maybeSingle();
-                data = retryResult.data;
-                error = retryResult.error;
-            }
+            console.log('[ImmediateSync] Upserting new measurement (no ID)');
         }
+
+        const { data, error } = await supabase
+            .from('measurements')
+            .upsert(payload)
+            .select()
+            .maybeSingle();
 
         if (error) {
             console.error('[ImmediateSync] Error syncing measurement:', error);

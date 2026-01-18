@@ -159,16 +159,23 @@ async function reconcileClients(businessId) {
                 }
 
                 // Use existing UUID (NEVER generate new)
+                const payload = {
+                    user_id: user.id,
+                    business_id: businessId,
+                    name: local.name,
+                    phone: local.phone || null,
+                    sex: local.sex || null
+                };
+
+                // Preserve existing identity if available
+                const existingId = local.server_id || local.id;
+                if (existingId && (typeof existingId === 'string' && existingId.includes('-'))) {
+                    payload.id = existingId;
+                }
+
                 const { data, error } = await supabase
                     .from('clients')
-                    .upsert({
-                        // id intentionally omitted - Supabase generates it
-                        user_id: user.id,
-                        business_id: businessId,
-                        name: local.name,
-                        phone: local.phone || null,
-                        sex: local.sex || null
-                    })
+                    .upsert(payload)
                     .select()
                     .maybeSingle();
 
@@ -366,27 +373,34 @@ async function reconcileMeasurements(businessId, clientId = null) {
                 }
 
                 // Use existing UUID (NEVER generate new)
+                const payload = {
+                    user_id: user.id,
+                    business_id: businessId,
+                    client_id: local.client_id,
+                    garment_type: local.garment_type || null,
+                    shoulder: local.shoulder || null,
+                    chest: local.chest || null,
+                    waist: local.waist || null,
+                    sleeve: local.sleeve || null,
+                    length: local.length || null,
+                    neck: local.neck || null,
+                    hip: local.hip || null,
+                    inseam: local.inseam || null,
+                    thigh: local.thigh || null,
+                    seat: local.seat || null,
+                    notes: local.notes || null,
+                    custom_fields: local.customFields || local.custom_fields || {}
+                };
+
+                // Preserve existing identity if available
+                const existingId = local.server_id || local.id;
+                if (existingId && (typeof existingId === 'string' && existingId.includes('-'))) {
+                    payload.id = existingId;
+                }
+
                 const { data, error } = await supabase
                     .from('measurements')
-                    .upsert({
-                        // id intentionally omitted - Supabase generates it
-                        user_id: user.id,
-                        business_id: businessId,
-                        client_id: local.client_id,
-                        garment_type: local.garment_type || null,
-                        shoulder: local.shoulder || null,
-                        chest: local.chest || null,
-                        waist: local.waist || null,
-                        sleeve: local.sleeve || null,
-                        length: local.length || null,
-                        neck: local.neck || null,
-                        hip: local.hip || null,
-                        inseam: local.inseam || null,
-                        thigh: local.thigh || null,
-                        seat: local.seat || null,
-                        notes: local.notes || null,
-                        custom_fields: local.customFields || local.custom_fields || {}
-                    })
+                    .upsert(payload)
                     .select()
                     .maybeSingle();
 

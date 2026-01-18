@@ -95,17 +95,17 @@ async function saveClientLocal(clientData, userId, businessId) {
     if (!businessId) {
         throw new Error('CRITICAL: business_id is required');
     }
-    
+
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(businessId)) {
         throw new Error('CRITICAL: business_id must be valid UUID format');
     }
-    
+
     // STRICT: UUID generated ONCE - use server_id if provided, otherwise generate
     // NEVER regenerate if server_id exists
     const serverId = clientData.server_id || generateUUID();
     const localId = clientData.local_id || serverId; // Use server_id as local_id if no local_id
-    
+
     const db = await getDB();
     const transaction = db.transaction([STORE_CLIENTS], 'readwrite');
     const store = transaction.objectStore(STORE_CLIENTS);
@@ -169,7 +169,7 @@ async function getClientsByBusinessId(businessId) {
     if (!businessId) {
         throw new Error('CRITICAL: business_id is required');
     }
-    
+
     const db = await getDB();
     const transaction = db.transaction([STORE_CLIENTS], 'readonly');
     const store = transaction.objectStore(STORE_CLIENTS);
@@ -179,7 +179,7 @@ async function getClientsByBusinessId(businessId) {
         if (store.indexNames.contains('business_id')) {
             const index = store.index('business_id');
             const request = index.getAll(businessId);
-            
+
             request.onsuccess = () => {
                 const clients = request.result.map(c => ({
                     id: c.server_id || c.local_id,
@@ -199,7 +199,7 @@ async function getClientsByBusinessId(businessId) {
             // Fallback: Scan all clients and filter by business_id
             const request = store.openCursor();
             const clients = [];
-            
+
             request.onsuccess = (event) => {
                 const cursor = event.target.result;
                 if (cursor) {
@@ -356,16 +356,16 @@ async function getUnsyncedClients(userId) {
             console.warn('[IndexedDB] Database not initialized');
             return [];
         }
-        
+
         const transaction = db.transaction([STORE_CLIENTS], 'readonly');
         const store = transaction.objectStore(STORE_CLIENTS);
-        
+
         // Guard: Check if index exists
         if (!store.indexNames.contains('user_id')) {
             console.warn('[IndexedDB] user_id index not found');
             return [];
         }
-        
+
         const index = store.index('user_id');
 
         return new Promise((resolve, reject) => {
@@ -418,19 +418,19 @@ async function markClientSynced(localId, serverId) {
                     if (measurementsStore.indexNames.contains('client_id')) {
                         const measurementsIndex = measurementsStore.index('client_id');
                         const measurementsRequest = measurementsIndex.getAll(localId);
-                        
+
                         measurementsRequest.onsuccess = () => {
                             const measurements = measurementsRequest.result;
                             if (measurements.length > 0) {
                                 // Update each measurement's client_id to server_id
                                 let updateCount = 0;
                                 const total = measurements.length;
-                                
+
                                 if (total === 0) {
                                     resolve(updated);
                                     return;
                                 }
-                                
+
                                 measurements.forEach(measurement => {
                                     const updatedMeasurement = {
                                         ...measurement,
@@ -466,7 +466,7 @@ async function markClientSynced(localId, serverId) {
                         const allMeasurementsRequest = measurementsStore.openCursor();
                         let updateCount = 0;
                         let totalToUpdate = 0;
-                        
+
                         allMeasurementsRequest.onsuccess = (event) => {
                             const cursor = event.target.result;
                             if (cursor) {
@@ -512,26 +512,26 @@ async function saveMeasurementLocal(measurementData, userId, businessId) {
     if (!businessId) {
         throw new Error('CRITICAL: business_id is required');
     }
-    
+
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(businessId)) {
         throw new Error('CRITICAL: business_id must be valid UUID format');
     }
-    
+
     // STRICT GUARD: Verify client_id is valid UUID
     if (!measurementData.client_id) {
         throw new Error('CRITICAL: client_id is required');
     }
-    
+
     if (!uuidRegex.test(measurementData.client_id)) {
         throw new Error('CRITICAL: client_id must be valid UUID format');
     }
-    
+
     // STRICT: UUID generated ONCE - use server_id if provided, otherwise generate
     // NEVER regenerate if server_id exists
     const serverId = measurementData.server_id || generateUUID();
     const localId = measurementData.local_id || serverId; // Use server_id as local_id if no local_id
-    
+
     const db = await getDB();
     const transaction = db.transaction([STORE_MEASUREMENTS], 'readwrite');
     const store = transaction.objectStore(STORE_MEASUREMENTS);
@@ -617,7 +617,7 @@ async function getMeasurementsByBusinessId(businessId, clientId = null) {
     if (!businessId) {
         throw new Error('CRITICAL: business_id is required');
     }
-    
+
     const db = await getDB();
     const transaction = db.transaction([STORE_MEASUREMENTS], 'readonly');
     const store = transaction.objectStore(STORE_MEASUREMENTS);
@@ -627,7 +627,7 @@ async function getMeasurementsByBusinessId(businessId, clientId = null) {
         if (store.indexNames.contains('business_id')) {
             const index = store.index('business_id');
             const request = index.getAll(businessId);
-            
+
             request.onsuccess = () => {
                 let measurements = request.result.map(m => ({
                     id: m.server_id || m.local_id,
@@ -650,12 +650,12 @@ async function getMeasurementsByBusinessId(businessId, clientId = null) {
                     customFields: m.custom_fields || {},
                     synced: m.synced
                 }));
-                
+
                 // Filter by client_id if provided
                 if (clientId) {
                     measurements = measurements.filter(m => m.client_id === clientId);
                 }
-                
+
                 // Sort by date_created descending
                 measurements.sort((a, b) => new Date(b.date_created) - new Date(a.date_created));
                 resolve(measurements);
@@ -665,7 +665,7 @@ async function getMeasurementsByBusinessId(businessId, clientId = null) {
             // Fallback: Scan all measurements and filter by business_id
             const request = store.openCursor();
             const measurements = [];
-            
+
             request.onsuccess = (event) => {
                 const cursor = event.target.result;
                 if (cursor) {
@@ -713,9 +713,10 @@ async function getMeasurementLocal(identifier, userId) {
     const store = transaction.objectStore(STORE_MEASUREMENTS);
 
     return new Promise((resolve, reject) => {
+        // Try by local_id first
         const request = store.get(identifier);
         request.onsuccess = () => {
-            if (request.result && request.result.user_id === userId) {
+            if (request.result && (!userId || request.result.user_id === userId)) {
                 const m = request.result;
                 resolve({
                     id: m.server_id || m.local_id,
@@ -738,7 +739,41 @@ async function getMeasurementLocal(identifier, userId) {
                     synced: m.synced
                 });
             } else {
-                resolve(null);
+                // Try by server_id
+                if (store.indexNames.contains('server_id')) {
+                    const index = store.index('server_id');
+                    const indexRequest = index.get(identifier);
+                    indexRequest.onsuccess = () => {
+                        const m = indexRequest.result;
+                        if (m && (!userId || m.user_id === userId)) {
+                            resolve({
+                                id: m.server_id || m.local_id,
+                                local_id: m.local_id,
+                                client_id: m.client_id,
+                                garment_type: m.garment_type || null,
+                                date_created: m.created_at,
+                                shoulder: m.shoulder || null,
+                                chest: m.chest || null,
+                                waist: m.waist || null,
+                                sleeve: m.sleeve || null,
+                                length: m.length || null,
+                                neck: m.neck || null,
+                                hip: m.hip || null,
+                                inseam: m.inseam || null,
+                                thigh: m.thigh || null,
+                                seat: m.seat || null,
+                                notes: m.notes || null,
+                                customFields: m.custom_fields || {},
+                                synced: m.synced
+                            });
+                        } else {
+                            resolve(null);
+                        }
+                    };
+                    indexRequest.onerror = () => reject(indexRequest.error);
+                } else {
+                    resolve(null);
+                }
             }
         };
         request.onerror = () => reject(request.error);
@@ -755,14 +790,27 @@ async function updateMeasurementLocal(localId, updates, userId) {
         const getRequest = store.get(localId);
         getRequest.onsuccess = () => {
             const measurement = getRequest.result;
-            if (!measurement || measurement.user_id !== userId) {
-                reject(new Error('Measurement not found or access denied'));
+            if (!measurement) {
+                console.error('[IndexedDB] Update failed: Measurement not found', { localId, userId });
+                reject(new Error('Measurement not found in local database'));
+                return;
+            }
+
+            // Access check - be slightly more permissive if user_id is missing in DB (legacy)
+            if (measurement.user_id && measurement.user_id !== userId) {
+                console.error('[IndexedDB] Update failed: Access denied (User ID mismatch)', {
+                    localId,
+                    currentUserId: userId,
+                    ownerUserId: measurement.user_id
+                });
+                reject(new Error('Access denied: Measurement belongs to another user'));
                 return;
             }
 
             const updated = {
                 ...measurement,
                 ...updates,
+                user_id: userId, // Ensure user_id is set
                 updated_at: new Date().toISOString(),
                 synced: false // Mark as unsynced when updated
             };
@@ -807,8 +855,15 @@ async function deleteMeasurementLocal(localId, userId) {
         const getRequest = store.get(localId);
         getRequest.onsuccess = () => {
             const measurement = getRequest.result;
-            if (!measurement || measurement.user_id !== userId) {
-                reject(new Error('Measurement not found or access denied'));
+            if (!measurement) {
+                console.warn('[IndexedDB] Delete failed: Measurement not found', { localId });
+                resolve(); // Already deleted or not found, resolve successfully
+                return;
+            }
+
+            if (measurement.user_id && measurement.user_id !== userId) {
+                console.error('[IndexedDB] Delete failed: Access denied', { localId, userId, ownerId: measurement.user_id });
+                reject(new Error('Access denied: Measurement belongs to another user'));
                 return;
             }
 
@@ -828,16 +883,16 @@ async function getUnsyncedMeasurements(userId) {
             console.warn('[IndexedDB] Database not initialized');
             return [];
         }
-        
+
         const transaction = db.transaction([STORE_MEASUREMENTS], 'readonly');
         const store = transaction.objectStore(STORE_MEASUREMENTS);
-        
+
         // Guard: Check if index exists
         if (!store.indexNames.contains('user_id')) {
             console.warn('[IndexedDB] user_id index not found');
             return [];
         }
-        
+
         const index = store.index('user_id');
 
         return new Promise((resolve, reject) => {
@@ -888,6 +943,67 @@ async function markMeasurementSynced(localId, serverId) {
     });
 }
 
+// Cache measurements from Supabase into IndexedDB for offline access
+async function cacheMeasurementsFromSupabase(measurements, userId, businessId) {
+    if (!measurements || (!Array.isArray(measurements) && !measurements.id)) {
+        return;
+    }
+
+    const measurementsArray = Array.isArray(measurements) ? measurements : [measurements];
+    if (measurementsArray.length === 0) return;
+
+    const db = await getDB();
+    const transaction = db.transaction([STORE_MEASUREMENTS], 'readwrite');
+    const store = transaction.objectStore(STORE_MEASUREMENTS);
+
+    return new Promise((resolve, reject) => {
+        let completed = 0;
+        const total = measurementsArray.length;
+
+        measurementsArray.forEach(m => {
+            // Use the measurement's ID as both local_id and server_id
+            const measurementData = {
+                local_id: m.id,
+                server_id: m.id,
+                user_id: userId,
+                business_id: businessId,
+                client_id: m.client_id,
+                garment_type: m.garment_type || null,
+                shoulder: m.shoulder || null,
+                chest: m.chest || null,
+                waist: m.waist || null,
+                sleeve: m.sleeve || null,
+                length: m.length || null,
+                neck: m.neck || null,
+                hip: m.hip || null,
+                inseam: m.inseam || null,
+                thigh: m.thigh || null,
+                seat: m.seat || null,
+                notes: m.notes || null,
+                custom_fields: m.custom_fields || m.customFields || {},
+                synced: true, // Mark as synced since it came from Supabase
+                created_at: m.created_at || m.date_created || new Date().toISOString(),
+                updated_at: m.updated_at || new Date().toISOString()
+            };
+
+            const request = store.put(measurementData);
+            request.onsuccess = () => {
+                completed++;
+                if (completed === total) {
+                    resolve();
+                }
+            };
+            request.onerror = () => {
+                console.warn('[IndexedDB] Error caching measurement:', request.error);
+                completed++;
+                if (completed === total) {
+                    resolve(); // Still resolve even if some failed
+                }
+            };
+        });
+    });
+}
+
 // Export functions
 if (typeof window !== 'undefined') {
     window.indexedDBHelper = {
@@ -910,7 +1026,8 @@ if (typeof window !== 'undefined') {
         updateMeasurementLocal,
         deleteMeasurementLocal,
         getUnsyncedMeasurements,
-        markMeasurementSynced
+        markMeasurementSynced,
+        cacheMeasurementsFromSupabase // Cache measurements from Supabase for offline access
     };
 }
 

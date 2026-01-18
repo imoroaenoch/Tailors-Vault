@@ -2064,10 +2064,46 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
         try {
             // Find measurement by local_id or server_id
             let localId = measurementId;
-            const existingMeasurement = await window.indexedDBHelper.getMeasurementLocal(measurementId, user.id);
-            if (existingMeasurement) {
-                localId = existingMeasurement.local_id;
+            let existingMeasurement = await window.indexedDBHelper.getMeasurementLocal(measurementId, user.id);
+
+            // If measurement not in IndexedDB, try to fetch from Supabase and cache it
+            if (!existingMeasurement && isOnline()) {
+                try {
+                    const supabase = await getSupabaseAsync();
+                    if (supabase) {
+                        const { data: fetchedMeasurement, error } = await supabase
+                            .from('measurements')
+                            .select('*')
+                            .eq('id', measurementId)
+                            .eq('user_id', user.id)
+                            .single();
+
+                        if (!error && fetchedMeasurement) {
+                            // Cache it for offline access
+                            await window.indexedDBHelper.cacheMeasurementsFromSupabase(
+                                fetchedMeasurement,
+                                user.id,
+                                business.id
+                            );
+                            // Now try to get it again from IndexedDB
+                            existingMeasurement = await window.indexedDBHelper.getMeasurementLocal(measurementId, user.id);
+                        }
+                    }
+                } catch (fetchErr) {
+                    console.warn('[saveMeasurement] Failed to fetch measurement from Supabase:', fetchErr);
+                }
             }
+
+            // If still not found, throw error
+            if (!existingMeasurement) {
+                if (isOnline()) {
+                    throw new Error('Measurement not found. It may have been deleted.');
+                } else {
+                    throw new Error('Measurement not available offline. Please connect to the internet to load this measurement.');
+                }
+            }
+
+            localId = existingMeasurement.local_id;
 
             const updates = {
                 garment_type: formData.garmentType || null,
@@ -2153,6 +2189,9 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
             // Show success message
             showToast('Measurement updated successfully!', 'success', 2000);
 
+            // Clear edit ID explicitly
+            currentMeasurementId = null;
+
             // Update UI immediately
             const currentScreen = document.querySelector('.screen.active');
             if (currentScreen?.id === 'home-screen') {
@@ -2174,7 +2213,8 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
 
         try {
             // STRICT: Generate UUID ONCE at creation, NEVER regenerate
-            const measurementId = generateUUID();
+            const newMeasurementId = generateUUID();
+            console.log('[saveMeasurement] Creating new measurement with ID:', newMeasurementId);
 
             // Determine if this is an offline save
             const isOffline = !isOnline();
@@ -2184,7 +2224,7 @@ async function saveMeasurement(clientId, formData, measurementId = null) {
             const synced = isOnline() && !isOffline;
 
             const measurementData = {
-                server_id: measurementId, // UUID generated ONCE
+                server_id: newMeasurementId, // UUID generated ONCE
                 client_id: resolvedClientId,
                 garment_type: formData.garmentType || null,
                 shoulder: formData.shoulder || null,
@@ -3594,6 +3634,9 @@ async function renderRecentMeasurements(resetPagination = true) {
         });
     }
 }
+
+// Make renderRecentMeasurements globally accessible
+window.renderRecentMeasurements = renderRecentMeasurements;
 
 // Format date for recent items (shorter format)
 function formatDateShort(dateString) {
@@ -7105,6 +7148,42 @@ async function getClients(forceRefresh = false) {
         }
     }
 
+    const business = getCachedBusiness();
+
+    // If forceRefresh is requested and we are online, fetch from Supabase first
+    if (forceRefresh && isOnline() && business) {
+        try {
+            const supabase = await getSupabaseAsync();
+            if (supabase) {
+                const { data: clientsData, error: clientsError } = await supabase
+                    .from('clients')
+                    .select('*')
+                    .eq('business_id', business.id)
+                    .order('created_at', { ascending: false });
+
+                if (!clientsError && clientsData) {
+                    // Seed/Cache into IndexedDB
+                    for (const client of clientsData) {
+                        try {
+                            await window.indexedDBHelper.saveClientLocal({
+                                server_id: client.id,
+                                name: client.name,
+                                phone: client.phone || null,
+                                sex: client.sex || null,
+                                created_at: client.created_at,
+                                synced: true
+                            }, user.id, business.id);
+                        } catch (saveErr) {
+                            console.warn('[GetClients] Error caching client:', saveErr);
+                        }
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn('[GetClients] Force refresh failed:', err);
+        }
+    }
+
     try {
         // Read from IndexedDB (local-first)
         const clients = await window.indexedDBHelper.getClientsLocal(user.id);
@@ -7132,6 +7211,33 @@ async function getMeasurements(forceRefresh = false) {
     // Initialize IndexedDB if needed
     if (!window.indexedDBHelper) {
         await window.indexedDBHelper.initDB();
+    }
+
+    const business = getCachedBusiness();
+
+    // If forceRefresh is requested and we are online, fetch from Supabase first
+    if (forceRefresh && isOnline() && business) {
+        try {
+            const supabase = await getSupabaseAsync();
+            if (supabase) {
+                const { data: measurementsData, error: measurementsError } = await supabase
+                    .from('measurements')
+                    .select('*')
+                    .eq('business_id', business.id)
+                    .order('created_at', { ascending: false });
+
+                if (!measurementsError && measurementsData) {
+                    // Cache into IndexedDB
+                    await window.indexedDBHelper.cacheMeasurementsFromSupabase(
+                        measurementsData,
+                        user.id,
+                        business.id
+                    );
+                }
+            }
+        } catch (err) {
+            console.warn('[GetMeasurements] Force refresh failed:', err);
+        }
     }
 
     try {
